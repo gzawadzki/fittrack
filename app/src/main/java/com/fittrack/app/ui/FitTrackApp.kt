@@ -221,8 +221,9 @@ private fun MainNavigation(
             composable(MainDestination.SETTINGS.route) {
                 SettingsRoute(
                     authRepository = container.authRepository,
-                    fitbitGateway = container.fitbitGateway,
-                    fitbitOAuthRedirectUri = "fittrack://auth/fitbit",
+                    healthConnectGateway = container.healthConnectGateway,
+                    healthRepository = container.healthRepository,
+                    healthConnectSyncGateway = container.healthConnectSyncGateway,
                 )
             }
         }

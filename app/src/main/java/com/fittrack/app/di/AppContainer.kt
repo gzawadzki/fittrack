@@ -17,20 +17,20 @@ import com.fittrack.core.model.repository.FitbitDataRepository
 import com.fittrack.core.model.repository.PlanRepository
 import com.fittrack.core.model.repository.ProfileRepository
 import com.fittrack.core.model.repository.WorkoutRepository
+import com.fittrack.core.network.AndroidHealthConnectGateway
 import com.fittrack.core.network.AuthRepository
 import com.fittrack.core.network.CoachGatewayException
 import com.fittrack.core.network.EncryptedSessionStore
-import com.fittrack.core.network.FitbitGateway
-import com.fittrack.core.network.FitbitGatewayError
-import com.fittrack.core.network.FitbitGatewayState
-import com.fittrack.core.network.FitbitOAuthStartResult
-import com.fittrack.core.network.FitbitSyncRequest
-import com.fittrack.core.network.FitbitSyncResult
+import com.fittrack.core.network.HealthConnectGateway
+import com.fittrack.core.network.HealthConnectSyncGateway
+import com.fittrack.core.network.NetworkError
 import com.fittrack.core.network.SupabaseAuthRepository
 import com.fittrack.core.network.SupabaseCoachGateway
-import com.fittrack.core.network.SupabaseFitbitGateway
 import com.fittrack.core.network.SupabaseSyncClient
+import com.fittrack.core.network.SyncBatchRequest
+import com.fittrack.core.network.SyncClient
 import com.fittrack.core.network.SyncOrchestrator
+import com.fittrack.core.network.SyncResult
 import com.fittrack.core.network.NetworkWorkDependencies
 import com.fittrack.core.network.NetworkWorkScheduler
 import com.fittrack.core.training.CoachEngine
@@ -45,8 +45,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 
 class AppContainer(private val application: Application) {
@@ -60,15 +58,24 @@ class AppContainer(private val application: Application) {
     private val roomWorkoutRepository = RoomWorkoutRepository(database)
     private val coachEngine = CoachEngine(planRepository, roomWorkoutRepository, healthRepository)
 
+    private val sessionStore = EncryptedSessionStore(application)
+    val authRepository: AuthRepository = SupabaseAuthRepository(
+        projectUrl = BuildConfig.SUPABASE_URL,
+        anonKey = BuildConfig.SUPABASE_ANON_KEY,
+        sessionStore = sessionStore,
+    )
+
+    /** Shared `/sync-batch` client. `null` when Supabase isn't configured -
+     * [syncOrchestrator] treats that as "sync disabled"; [healthConnectSyncGateway]
+     * falls back to [UnavailableSyncClient] so it always has a non-null client. */
+    private val syncClient: SyncClient? = BuildConfig.SUPABASE_URL
+        .takeIf { it.isValidHttpsBaseUrl() && BuildConfig.SUPABASE_ANON_KEY.isNotBlank() }
+        ?.let { baseUrl -> SupabaseSyncClient("${baseUrl.trimEnd('/')}/functions/v1", authRepository) }
+
     private val syncOrchestrator: SyncOrchestrator? by lazy {
-        BuildConfig.SUPABASE_URL
-            .takeIf { it.isValidHttpsBaseUrl() && BuildConfig.SUPABASE_ANON_KEY.isNotBlank() }
-            ?.let { baseUrl ->
-                SyncOrchestrator(
-                    outbox = RoomSyncOutboxStore(database),
-                    client = SupabaseSyncClient("${baseUrl.trimEnd('/')}/functions/v1", authRepository),
-                )
-            }
+        syncClient?.let { client ->
+            SyncOrchestrator(outbox = RoomSyncOutboxStore(database), client = client)
+        }
     }
 
     val workoutRepository: WorkoutRepository = IntegratedWorkoutRepository(
@@ -79,23 +86,22 @@ class AppContainer(private val application: Application) {
         },
     )
 
-    private val sessionStore = EncryptedSessionStore(application)
-    val authRepository: AuthRepository = SupabaseAuthRepository(
-        projectUrl = BuildConfig.SUPABASE_URL,
-        anonKey = BuildConfig.SUPABASE_ANON_KEY,
-        sessionStore = sessionStore,
-    )
-
     val coachGateway: CoachGateway = BuildConfig.SUPABASE_URL
         .takeIf { it.isValidHttpsBaseUrl() && BuildConfig.SUPABASE_ANON_KEY.isNotBlank() }
         ?.let { SupabaseCoachGateway("${it.trimEnd('/')}/functions/v1", authRepository) }
         ?: UnavailableCoachGateway
 
-    private val remoteFitbitGateway: FitbitGateway = BuildConfig.SUPABASE_URL
-        .takeIf { it.isValidHttpsBaseUrl() && BuildConfig.SUPABASE_ANON_KEY.isNotBlank() }
-        ?.let { SupabaseFitbitGateway("${it.trimEnd('/')}/functions/v1", authRepository) }
-        ?: UnavailableFitbitGateway
-    val fitbitGateway: FitbitGateway = PersistingFitbitGateway(remoteFitbitGateway, fitbitDataRepository)
+    /** On-device Health Connect reader (see docs/adr/0001-fitbit-health-connect-pivot.md).
+     * Replaces the old server-side Fitbit OAuth gateway - no client secret,
+     * no server round-trip, permissions granted through the Android system
+     * permission dialog (feature/settings owns launching that prompt). */
+    val healthConnectGateway: HealthConnectGateway = AndroidHealthConnectGateway(application)
+
+    /** Pushes Health Connect reads to Supabase via the existing `/sync-batch`
+     * contract. Uses [UnavailableSyncClient] (never null) so callers don't
+     * need to special-case "Supabase not configured". */
+    val healthConnectSyncGateway: HealthConnectSyncGateway =
+        HealthConnectSyncGateway(syncClient ?: UnavailableSyncClient)
 
     fun start() {
         syncOrchestrator?.let { orchestrator ->
@@ -157,24 +163,7 @@ private object UnavailableCoachGateway : CoachGateway {
     override suspend fun getDebrief(workoutSessionId: String): CoachReply = unavailable()
 }
 
-private object UnavailableFitbitGateway : FitbitGateway {
-    private val unavailableError = FitbitGatewayError(
-        code = "FITBIT_NOT_CONFIGURED",
-        userMessage = "Fitbit wymaga konfiguracji Supabase i zalogowania.",
-        retryable = false,
-    )
-    private val mutableState = MutableStateFlow<FitbitGatewayState>(FitbitGatewayState.Disconnected)
-    override val state: StateFlow<FitbitGatewayState> = mutableState
-
-    override suspend fun startOAuth(redirectUri: String): FitbitOAuthStartResult =
-        FitbitOAuthStartResult.Failure(unavailableError).also {
-            mutableState.value = FitbitGatewayState.Failure(com.fittrack.core.network.FitbitOperation.OAUTH_START, unavailableError)
-        }
-
-    override fun handleOAuthCallback(success: Boolean, reason: String?) = Unit
-
-    override suspend fun sync(request: FitbitSyncRequest): FitbitSyncResult =
-        FitbitSyncResult.Failure(unavailableError).also {
-            mutableState.value = FitbitGatewayState.Failure(com.fittrack.core.network.FitbitOperation.SYNC, unavailableError)
-        }
+private object UnavailableSyncClient : SyncClient {
+    override suspend fun sync(request: SyncBatchRequest): SyncResult =
+        SyncResult.Failure(NetworkError("SYNC_NOT_CONFIGURED", "Synchronizacja wymaga konfiguracji Supabase i zalogowania.", false))
 }

@@ -12,11 +12,12 @@ import androidx.work.WorkRequest
 import androidx.work.WorkerParameters
 import androidx.work.workDataOf
 import com.fittrack.app.FitTrackApplication
-import com.fittrack.core.network.FitbitRemoteSyncStatus
-import com.fittrack.core.network.FitbitSyncMode
-import com.fittrack.core.network.FitbitSyncRequest
-import com.fittrack.core.network.FitbitSyncResult
+import com.fittrack.core.model.FitbitSyncStatus
+import com.fittrack.core.network.ExerciseTimeRange
+import com.fittrack.core.network.SyncResult
 import com.fittrack.core.network.SyncWorker
+import com.fittrack.core.network.toFitbitDataPayload
+import java.time.Instant
 import java.util.concurrent.TimeUnit
 
 object PostWorkoutSyncScheduler {
@@ -28,7 +29,7 @@ object PostWorkoutSyncScheduler {
             .setConstraints(constraints)
             .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, WorkRequest.MIN_BACKOFF_MILLIS, TimeUnit.MILLISECONDS)
             .build()
-        val fitbit = OneTimeWorkRequestBuilder<PostWorkoutFitbitWorker>()
+        val healthConnect = OneTimeWorkRequestBuilder<PostWorkoutHealthConnectWorker>()
             .setInputData(workDataOf(INPUT_WORKOUT_ID to workoutId))
             .setConstraints(constraints)
             .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
@@ -37,25 +38,51 @@ object PostWorkoutSyncScheduler {
             "fittrack.post-workout.$workoutId",
             ExistingWorkPolicy.KEEP,
             upload,
-        ).then(fitbit).enqueue()
+        ).then(healthConnect).enqueue()
     }
 }
 
-class PostWorkoutFitbitWorker(appContext: Context, params: WorkerParameters) : CoroutineWorker(appContext, params) {
+/**
+ * Reads the just-finished workout's heart-rate window from on-device Health
+ * Connect, persists the normalized result locally, and pushes the computed
+ * per-exercise aggregates to Supabase. Replaces the old
+ * `PostWorkoutFitbitWorker`, which called the now-deleted server-side Fitbit
+ * `WORKOUT_HR` sync mode - see docs/adr/0001-fitbit-health-connect-pivot.md.
+ */
+class PostWorkoutHealthConnectWorker(appContext: Context, params: WorkerParameters) : CoroutineWorker(appContext, params) {
     override suspend fun doWork(): Result {
         val workoutId = inputData.getString(PostWorkoutSyncScheduler.INPUT_WORKOUT_ID) ?: return Result.failure()
-        val gateway = (applicationContext as FitTrackApplication).container.fitbitGateway
-        return when (val result = gateway.sync(FitbitSyncRequest(FitbitSyncMode.WORKOUT_HR, workoutId))) {
-            is FitbitSyncResult.Failure -> if (result.error.retryable || result.error.code == "AUTH_REQUIRED") {
-                Result.retry()
-            } else {
-                Result.failure()
+        val container = (applicationContext as FitTrackApplication).container
+
+        val workout = container.workoutRepository.getWorkout(workoutId) ?: return Result.failure()
+        val endedAt = workout.endedAt ?: return Result.retry()
+
+        val exerciseRanges = container.workoutRepository.getExerciseSessions(workoutId).mapNotNull { session ->
+            val startedAt = session.startedAt ?: return@mapNotNull null
+            val sessionEndedAt = session.endedAt ?: return@mapNotNull null
+            ExerciseTimeRange(exerciseId = session.id, startAt = startedAt, endAt = sessionEndedAt)
+        }
+
+        return try {
+            val readResult = container.healthConnectGateway.readWorkoutHeartRate(
+                workoutStartedAt = workout.startedAt,
+                workoutEndedAt = endedAt,
+                exercises = exerciseRanges,
+            )
+            val syncedAt = Instant.now()
+            container.fitbitDataRepository.persist(
+                readResult.toFitbitDataPayload(
+                    workoutSessionId = workoutId,
+                    workoutSyncStatus = FitbitSyncStatus.SYNCED,
+                    syncedAt = syncedAt,
+                ),
+            )
+            when (container.healthConnectSyncGateway.pushWorkoutAggregates(workoutId, readResult.aggregates)) {
+                is SyncResult.Success -> Result.success()
+                is SyncResult.Failure -> Result.retry()
             }
-            is FitbitSyncResult.Success -> when (result.status) {
-                FitbitRemoteSyncStatus.SYNCED -> Result.success()
-                FitbitRemoteSyncStatus.PENDING, FitbitRemoteSyncStatus.PARTIAL -> Result.retry()
-                FitbitRemoteSyncStatus.FAILED -> if (result.retryAfterSeconds != null) Result.retry() else Result.failure()
-            }
+        } catch (e: Exception) {
+            Result.retry()
         }
     }
 }

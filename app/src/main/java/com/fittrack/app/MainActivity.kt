@@ -32,7 +32,6 @@ class MainActivity : ComponentActivity() {
         command = intent.toAppCommand()
         if (Build.VERSION.SDK_INT >= 33) notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
         val container = (application as FitTrackApplication).container
-        intent.deliverFitbitCallback(container)
         setContent {
             FitTrackTheme {
                 FitTrackApp(container, command, onCommandConsumed = { command = null })
@@ -44,17 +43,7 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         command = intent.toAppCommand()
-        intent.deliverFitbitCallback((application as FitTrackApplication).container)
     }
-}
-
-private fun Intent.deliverFitbitCallback(container: com.fittrack.app.di.AppContainer) {
-    val callback = data ?: return
-    if (callback.scheme != "fittrack" || callback.host != "auth" || callback.path != "/fitbit") return
-    container.fitbitGateway.handleOAuthCallback(
-        success = callback.getQueryParameter("status") == "ok",
-        reason = callback.getQueryParameter("reason"),
-    )
 }
 
 private fun Intent.toAppCommand(): AppCommand? {
