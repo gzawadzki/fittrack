@@ -33,6 +33,15 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
     implementation("org.json:json:20250107")
 
+    // Health Connect: on-device read access to steps/sleep/resting HR/exercise
+    // sessions/heart-rate series (see HealthConnectGateway.kt). Pinned exact
+    // version, no "+" ranges, per repo convention (no version catalog exists
+    // in this repo — every module pins literal versions directly). This
+    // version could not be confirmed against Google Maven in this sandbox (no
+    // network access) — verify it resolves before a real build; bump if a
+    // newer stable release exists by the time this is built.
+    implementation("androidx.health.connect:connect-client:1.1.0-alpha12")
+
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")
 }
