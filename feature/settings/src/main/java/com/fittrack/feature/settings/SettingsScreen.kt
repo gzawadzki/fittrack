@@ -5,11 +5,9 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Button
-import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -23,6 +21,8 @@ import com.fittrack.core.designsystem.DestructiveOutlinedButton
 import com.fittrack.core.designsystem.ErrorState
 import com.fittrack.core.designsystem.LoadingState
 import com.fittrack.core.designsystem.FitTrackCard
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 
 @Composable
 fun SettingsScreen(
@@ -30,14 +30,14 @@ fun SettingsScreen(
     onLogin: (String, CharArray) -> Unit,
     onLogout: () -> Unit,
     onRetry: () -> Unit,
-    onConnectFitbit: () -> Unit,
-    onSyncFitbit: () -> Unit,
+    onGrantHealthConnectPermissions: () -> Unit,
+    onSyncHealthConnect: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     when {
         state.isLoading -> LoadingState("Ładowanie ustawień…", modifier)
         state.loadErrorMessage != null -> ErrorState(state.loadErrorMessage, onRetry, modifier)
-        state.isAuthenticated -> SignedInSettings(state, onLogout, onConnectFitbit, onSyncFitbit, modifier)
+        state.isAuthenticated -> SignedInSettings(state, onLogout, onGrantHealthConnectPermissions, onSyncHealthConnect, modifier)
         else -> LoginForm(state, onLogin, modifier)
     }
 }
@@ -70,8 +70,8 @@ private fun LoginForm(state: SettingsUiState, onLogin: (String, CharArray) -> Un
 private fun SignedInSettings(
     state: SettingsUiState,
     onLogout: () -> Unit,
-    onConnectFitbit: () -> Unit,
-    onSyncFitbit: () -> Unit,
+    onGrantHealthConnectPermissions: () -> Unit,
+    onSyncHealthConnect: () -> Unit,
     modifier: Modifier,
 ) {
     Column(modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
@@ -89,73 +89,53 @@ private fun SignedInSettings(
                     enabled = !state.isSubmitting,
                 )
         }
-        FitbitCard(state, onConnectFitbit, onSyncFitbit)
-        Text("Tokeny Fitbit i hasło nie są wyświetlane ani zapisywane w UI.", style = MaterialTheme.typography.bodySmall)
+        HealthConnectCard(state, onGrantHealthConnectPermissions, onSyncHealthConnect)
+        Text("Dane zdrowotne pochodzą z Health Connect i są odczytywane wyłącznie na urządzeniu.", style = MaterialTheme.typography.bodySmall)
     }
 }
 
 @Composable
-private fun FitbitCard(state: SettingsUiState, onConnect: () -> Unit, onSync: () -> Unit) {
+private fun HealthConnectCard(state: SettingsUiState, onGrantPermissions: () -> Unit, onSync: () -> Unit) {
     FitTrackCard(Modifier.fillMaxWidth()) {
-            Text("Fitbit", style = MaterialTheme.typography.titleMedium)
-            Text(fitbitStatusLabel(state.fitbitState), color = MaterialTheme.colorScheme.primary)
-            Text(fitbitSyncLabel(state), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            state.fitbitErrorMessage?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-            when (state.fitbitState) {
-                FitbitConnectionState.DISCONNECTED -> {
-                    Button(
-                        onClick = onSync,
-                        enabled = !state.isFitbitBusy,
-                        modifier = Modifier.fillMaxWidth(),
-                    ) { Text("Sprawdź połączenie i synchronizuj") }
-                    TextButton(
-                        onClick = onConnect,
-                        enabled = !state.isFitbitBusy,
-                        modifier = Modifier.fillMaxWidth(),
-                    ) { Text("Połącz Fitbit") }
-                }
-                FitbitConnectionState.ERROR -> Button(
-                    onClick = onConnect,
-                    enabled = !state.isFitbitBusy,
+            Text("Health Connect", style = MaterialTheme.typography.titleMedium)
+            Text(healthConnectStatusLabel(state.healthConnectState), color = MaterialTheme.colorScheme.primary)
+            Text(healthConnectSyncLabel(state), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            state.healthConnectErrorMessage?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+            when (state.healthConnectState) {
+                HealthConnectState.UNAVAILABLE -> Text(
+                    "Zainstaluj lub zaktualizuj aplikację Health Connect, aby połączyć dane zdrowotne.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                HealthConnectState.NOT_GRANTED -> Button(
+                    onClick = onGrantPermissions,
+                    enabled = !state.isHealthConnectBusy,
                     modifier = Modifier.fillMaxWidth(),
-                ) { Text("Połącz ponownie") }
-                FitbitConnectionState.STARTING_OAUTH -> Button(
-                    onClick = {},
-                    enabled = false,
-                    modifier = Modifier.fillMaxWidth(),
-                ) { Text("Otwieranie autoryzacji…") }
-                FitbitConnectionState.AWAITING_CALLBACK -> {
-                    Text("Dokończ autoryzację w otwartej stronie Fitbit.", style = MaterialTheme.typography.bodySmall)
-                    Button(onClick = onConnect, enabled = !state.isFitbitBusy, modifier = Modifier.fillMaxWidth()) {
-                        Text("Rozpocznij ponownie")
-                    }
-                }
-                FitbitConnectionState.CONNECTED -> Button(
+                ) { Text("Udziel uprawnień Health Connect") }
+                HealthConnectState.GRANTED -> Button(
                     onClick = onSync,
-                    enabled = !state.isFitbitBusy,
+                    enabled = !state.isHealthConnectBusy,
                     modifier = Modifier.fillMaxWidth(),
-                ) { Text(if (state.fitbitSyncState == FitbitSyncState.SYNCING) "Synchronizowanie…" else "Synchronizuj dane dzienne") }
+                ) { Text(if (state.healthConnectSyncState == HealthConnectSyncState.SYNCING) "Synchronizowanie…" else "Synchronizuj teraz") }
             }
     }
 }
 
-private fun fitbitStatusLabel(state: FitbitConnectionState) = when (state) {
-    FitbitConnectionState.DISCONNECTED -> "Konto niepołączone"
-    FitbitConnectionState.STARTING_OAUTH -> "Rozpoczynanie autoryzacji"
-    FitbitConnectionState.AWAITING_CALLBACK -> "Oczekiwanie na Fitbit"
-    FitbitConnectionState.CONNECTED -> "Konto połączone"
-    FitbitConnectionState.ERROR -> "Połączenie wymaga uwagi"
+private fun healthConnectStatusLabel(state: HealthConnectState) = when (state) {
+    HealthConnectState.UNAVAILABLE -> "Health Connect niedostępny"
+    HealthConnectState.NOT_GRANTED -> "Brak uprawnień"
+    HealthConnectState.GRANTED -> "Uprawnienia przyznane"
 }
 
-private fun fitbitSyncLabel(state: SettingsUiState): String = when (state.fitbitSyncState) {
-    FitbitSyncState.IDLE -> "Po połączeniu możesz ręcznie pobrać sen, RHR, kroki i cardio."
-    FitbitSyncState.SYNCING -> "Pobieranie danych z Fitbit…"
-    FitbitSyncState.PENDING -> state.fitbitRetryAfterSeconds?.let { "Fitbit jeszcze przetwarza dane. Ponów za $it s." }
-        ?: "Fitbit jeszcze przetwarza dane. Spróbuj ponownie później."
-    FitbitSyncState.SYNCED -> state.fitbitImportedCounts.entries
-        .sortedBy { it.key }
-        .joinToString(prefix = "Zsynchronizowano: ", separator = ", ") { "${it.key}: ${it.value}" }
-        .takeUnless { state.fitbitImportedCounts.isEmpty() }
-        ?: "Dane Fitbit są aktualne."
-    FitbitSyncState.ERROR -> "Synchronizacja nie została ukończona."
+private fun healthConnectSyncLabel(state: SettingsUiState): String = when (state.healthConnectSyncState) {
+    HealthConnectSyncState.IDLE -> state.lastSyncedAt?.let { "Ostatnia synchronizacja: ${it.toLocalLabel()}" }
+        ?: "Po przyznaniu uprawnień możesz zsynchronizować sen, RHR i kroki."
+    HealthConnectSyncState.SYNCING -> "Odczytywanie danych z Health Connect…"
+    HealthConnectSyncState.SYNCED -> "Zsynchronizowano ${state.lastSyncedDayCount} dni" +
+        (state.lastSyncedAt?.let { " (${it.toLocalLabel()})" } ?: "")
+    HealthConnectSyncState.ERROR -> "Synchronizacja nie została ukończona."
 }
+
+private val LAST_SYNC_FORMATTER = DateTimeFormatter.ofPattern("dd.MM HH:mm")
+
+private fun java.time.Instant.toLocalLabel(): String =
+    LAST_SYNC_FORMATTER.format(this.atZone(ZoneId.systemDefault()))
