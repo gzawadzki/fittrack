@@ -10,13 +10,21 @@ class SupabaseSyncClient(
     override suspend fun sync(request: SyncBatchRequest): SyncResult {
         var session = authRepository.currentSession()
             ?: return SyncResult.Failure(NetworkError("NO_SESSION", "Zaloguj się ponownie.", false))
-        var response = post(session, request)
+        var response = try {
+            post(session, request)
+        } catch (e: Exception) {
+            return SyncResult.Failure(NetworkError("NETWORK_ERROR", "Nie udało się połączyć z serwerem.", true))
+        }
         if (response.status == 401) {
             when (val refresh = authRepository.refreshSession()) {
                 is AuthResult.Failure -> return SyncResult.Failure(refresh.error)
                 is AuthResult.Success -> session = refresh.session
             }
-            response = post(session, request) // same batchId makes this retry idempotent server-side
+            response = try {
+                post(session, request) // same batchId makes this retry idempotent server-side
+            } catch (e: Exception) {
+                return SyncResult.Failure(NetworkError("NETWORK_ERROR", "Nie udało się połączyć z serwerem.", true))
+            }
         }
         if (response.status !in 200..299) return SyncResult.Failure(response.toNetworkError())
         return runCatching { SyncResult.Success(parseSyncResponse(response.body)) }.getOrElse {

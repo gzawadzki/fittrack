@@ -16,6 +16,7 @@ import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.Surface
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -57,12 +58,12 @@ fun HistoryScreen(state: HistoryState, onRetry: () -> Unit, modifier: Modifier =
     when {
         state.isLoading -> LoadingState("Ładowanie historii…", modifier)
         state.errorMessage != null -> ErrorState(state.errorMessage, onRetry, modifier)
-        else -> HistoryContent(state, modifier)
+        else -> HistoryContent(state, onRetry, modifier)
     }
 }
 
 @Composable
-private fun HistoryContent(state: HistoryState, modifier: Modifier) {
+private fun HistoryContent(state: HistoryState, onRefresh: () -> Unit, modifier: Modifier) {
     var selectedTab by remember { mutableIntStateOf(0) }
     Column(modifier) {
         Column(Modifier.padding(start = 20.dp, top = 24.dp, end = 20.dp, bottom = 14.dp)) {
@@ -92,9 +93,11 @@ private fun HistoryContent(state: HistoryState, modifier: Modifier) {
                 summary = state.summary,
                 heartRates = state.heartRateByWorkout,
                 heartRateUnavailableMessage = state.heartRateUnavailableMessage,
+                isRefreshing = state.isLoading,
+                onRefresh = onRefresh,
             )
         } else {
-            CardioHistory(state.cardio, state.cardioUnavailableMessage)
+            CardioHistory(state.cardio, state.cardioUnavailableMessage, isRefreshing = state.isLoading, onRefresh = onRefresh)
         }
     }
 }
@@ -105,34 +108,38 @@ private fun StrengthHistory(
     summary: HistorySummary,
     heartRates: Map<String, WorkoutHeartRate>,
     heartRateUnavailableMessage: String?,
+    isRefreshing: Boolean,
+    onRefresh: () -> Unit,
 ) {
     if (entries.isEmpty()) {
         EmptyState("Brak historii treningów", "Ukończony trening pojawi się tutaj.")
         return
     }
-    LazyColumn(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        item { HistorySummaryPanel(summary) }
-        items(entries, key = { it.workoutId }) { item ->
-            var expanded by remember(item.workoutId) { mutableStateOf(false) }
-            FitTrackCard(modifier = Modifier.fillMaxWidth().clickable { expanded = !expanded }) {
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text(item.planName, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                        Text(fitbitLabel(item.fitbitState), style = MaterialTheme.typography.labelSmall, color = fitbitColor(item.fitbitState))
-                    }
-                    Text("${formatDate(item.startedAt)}  •  ${formatDuration(item.durationSeconds)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text("${item.exerciseCount} ćw.", style = MaterialTheme.typography.labelMedium)
-                        Text("${item.completedSetCount} serii", style = MaterialTheme.typography.labelMedium)
-                        Text("${formatVolume(item.totalVolumeKg)} kg", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
-                    }
-                    if (item.note.isNotBlank()) Text(item.note)
-                    if (expanded) {
-                        item.exercises.forEach { exercise -> ExerciseSummary(exercise) }
-                        heartRates[item.workoutId]?.let { HeartRateChart(it) }
-                            ?: heartRateUnavailableMessage?.let {
-                                Text(it, style = MaterialTheme.typography.bodySmall)
-                            }
-                    }
+    PullToRefreshBox(isRefreshing = isRefreshing, onRefresh = onRefresh) {
+        LazyColumn(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            item { HistorySummaryPanel(summary) }
+            items(entries, key = { it.workoutId }) { item ->
+                var expanded by remember(item.workoutId) { mutableStateOf(false) }
+                FitTrackCard(modifier = Modifier.fillMaxWidth().clickable { expanded = !expanded }) {
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text(item.planName, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                            Text(fitbitLabel(item.fitbitState), style = MaterialTheme.typography.labelSmall, color = fitbitColor(item.fitbitState))
+                        }
+                        Text("${formatDate(item.startedAt)}  •  ${formatDuration(item.durationSeconds)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text("${item.exerciseCount} ćw.", style = MaterialTheme.typography.labelMedium)
+                            Text("${item.completedSetCount} serii", style = MaterialTheme.typography.labelMedium)
+                            Text("${formatVolume(item.totalVolumeKg)} kg", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+                        }
+                        if (item.note.isNotBlank()) Text(item.note)
+                        if (expanded) {
+                            item.exercises.forEach { exercise -> ExerciseSummary(exercise) }
+                            heartRates[item.workoutId]?.let { HeartRateChart(it) }
+                                ?: heartRateUnavailableMessage?.let {
+                                    Text(it, style = MaterialTheme.typography.bodySmall)
+                                }
+                        }
+                }
             }
         }
     }
@@ -209,7 +216,7 @@ private fun HeartRateChart(rate: WorkoutHeartRate) {
 }
 
 @Composable
-private fun CardioHistory(entries: List<CardioHistoryItem>, unavailableMessage: String?) {
+private fun CardioHistory(entries: List<CardioHistoryItem>, unavailableMessage: String?, isRefreshing: Boolean, onRefresh: () -> Unit) {
     if (entries.isEmpty()) {
         EmptyState(
             "Brak aktywności cardio",
@@ -217,13 +224,15 @@ private fun CardioHistory(entries: List<CardioHistoryItem>, unavailableMessage: 
         )
         return
     }
-    LazyColumn(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        items(entries, key = { it.id }) { item ->
-            FitTrackCard(Modifier.fillMaxWidth()) {
-                    Text(item.kind, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                    Text(formatDate(item.startedAt), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text("${item.durationSeconds / 60} min" + item.distanceMeters?.let { "  •  ${"%.2f".format(it / 1000)} km" }.orEmpty(), style = MaterialTheme.typography.headlineSmall)
-                    Text(listOfNotNull(item.steps?.let { "$it kroków" }, item.averageHeartRate?.let { "śr. $it bpm" }).joinToString("  •  "), color = MaterialTheme.colorScheme.onSurfaceVariant)
+    PullToRefreshBox(isRefreshing = isRefreshing, onRefresh = onRefresh) {
+        LazyColumn(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            items(entries, key = { it.id }) { item ->
+                FitTrackCard(Modifier.fillMaxWidth()) {
+                        Text(item.kind, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                        Text(formatDate(item.startedAt), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text("${item.durationSeconds / 60} min" + item.distanceMeters?.let { "  •  ${"%.2f".format(it / 1000)} km" }.orEmpty(), style = MaterialTheme.typography.headlineSmall)
+                        Text(listOfNotNull(item.steps?.let { "$it kroków" }, item.averageHeartRate?.let { "śr. $it bpm" }).joinToString("  •  "), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
             }
         }
     }

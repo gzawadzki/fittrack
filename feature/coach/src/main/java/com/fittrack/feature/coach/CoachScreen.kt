@@ -18,6 +18,8 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.Surface
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -92,6 +94,7 @@ fun CoachScreen(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun CoachContent(
     state: CoachUiState,
@@ -105,8 +108,13 @@ private fun CoachContent(
     modifier: Modifier,
 ) {
     Column(modifier) {
+        PullToRefreshBox(
+            isRefreshing = state.isRefreshing,
+            onRefresh = onRefresh,
+            modifier = Modifier.weight(1f),
+        ) {
         LazyColumn(
-            Modifier.weight(1f).padding(horizontal = 16.dp),
+            Modifier.fillMaxWidth().padding(horizontal = 16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             item {
@@ -152,6 +160,7 @@ private fun CoachContent(
             }
             item { Text("Rozmowa", style = MaterialTheme.typography.titleLarge) }
             items(state.conversation, key = { it.id }) { MessageBubble(it, onOpenCitation) }
+        }
         }
         ChatComposer(
             value = state.messageDraft,

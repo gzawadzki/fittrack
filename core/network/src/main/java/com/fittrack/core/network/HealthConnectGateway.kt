@@ -142,12 +142,16 @@ class AndroidHealthConnectGateway(
         val hc = client ?: return WorkoutHeartRateReadResult(emptyList(), emptyList())
         val window = HrExerciseMatcher.computeHrWindow(workoutStartedAt, workoutEndedAt)
 
-        val records = hc.readRecords(
-            ReadRecordsRequest(
-                recordType = HeartRateRecord::class,
-                timeRangeFilter = TimeRangeFilter.between(window.start, window.end),
-            ),
-        ).records
+        val records = try {
+            hc.readRecords(
+                ReadRecordsRequest(
+                    recordType = HeartRateRecord::class,
+                    timeRangeFilter = TimeRangeFilter.between(window.start, window.end),
+                ),
+            ).records
+        } catch (e: Exception) {
+            return WorkoutHeartRateReadResult(emptyList(), emptyList())
+        }
 
         // Each HeartRateRecord spans [startTime, endTime] and holds a list of
         // instantaneous samples inside it — NOT one record per sample. See
@@ -166,13 +170,17 @@ class AndroidHealthConnectGateway(
         start: ZonedDateTime,
         end: ZonedDateTime,
     ): Map<String, Int> {
-        val response = hc.aggregateGroupByPeriod(
-            AggregateGroupByPeriodRequest(
-                metrics = setOf(StepsRecord.COUNT_TOTAL),
-                timeRangeFilter = TimeRangeFilter.between(start.toLocalDateTime(), end.toLocalDateTime()),
-                timeRangeSlicer = Period.ofDays(1),
-            ),
-        )
+        val response = try {
+            hc.aggregateGroupByPeriod(
+                AggregateGroupByPeriodRequest(
+                    metrics = setOf(StepsRecord.COUNT_TOTAL),
+                    timeRangeFilter = TimeRangeFilter.between(start.toLocalDateTime(), end.toLocalDateTime()),
+                    timeRangeSlicer = Period.ofDays(1),
+                ),
+            )
+        } catch (e: Exception) {
+            return emptyMap()
+        }
         return buildMap {
             response.forEach { bucket ->
                 val total = bucket.result[StepsRecord.COUNT_TOTAL] ?: return@forEach
@@ -188,12 +196,16 @@ class AndroidHealthConnectGateway(
     ): Map<String, Int> {
         // Sleep sessions are attributed to the day they *end* on (wake-up
         // day), matching how the old Fitbit sleep log was keyed by date.
-        val sessions = hc.readRecords(
-            ReadRecordsRequest(
-                recordType = SleepSessionRecord::class,
-                timeRangeFilter = TimeRangeFilter.between(start.toInstant(), end.toInstant()),
-            ),
-        ).records
+        val sessions = try {
+            hc.readRecords(
+                ReadRecordsRequest(
+                    recordType = SleepSessionRecord::class,
+                    timeRangeFilter = TimeRangeFilter.between(start.toInstant(), end.toInstant()),
+                ),
+            ).records
+        } catch (e: Exception) {
+            return emptyMap()
+        }
 
         val minutesByDay = mutableMapOf<String, Long>()
         sessions.forEach { session ->
@@ -209,12 +221,16 @@ class AndroidHealthConnectGateway(
         start: ZonedDateTime,
         end: ZonedDateTime,
     ): Map<String, Int> {
-        val records = hc.readRecords(
-            ReadRecordsRequest(
-                recordType = RestingHeartRateRecord::class,
-                timeRangeFilter = TimeRangeFilter.between(start.toInstant(), end.toInstant()),
-            ),
-        ).records
+        val records = try {
+            hc.readRecords(
+                ReadRecordsRequest(
+                    recordType = RestingHeartRateRecord::class,
+                    timeRangeFilter = TimeRangeFilter.between(start.toInstant(), end.toInstant()),
+                ),
+            ).records
+        } catch (e: Exception) {
+            return emptyMap()
+        }
 
         // If a device writes more than one resting-HR reading for a day, keep
         // the latest one for that day, mirroring "one value per day" from the
