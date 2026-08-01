@@ -1,0 +1,62 @@
+{
+  "version": 1,
+  "description": "Manifest of curated knowledge sources for the FitTrack coach. Every citation the coach returns must trace back to one of these entries (matched by url). knowledge-reindex only ingests documents listed here.",
+  "sources": [
+    {
+      "id": "progressive-overload",
+      "title": "Progressive overload and strength adaptation",
+      "file": "sources/progressive-overload.md",
+      "url": "https://www.nsca.com/education/articles/ksa/progressive-overload/",
+      "origin": "NSCA (National Strength and Conditioning Association) educational article, curated summary",
+      "topics": ["load progression", "increments", "strength training"]
+    },
+    {
+      "id": "rir-autoregulation",
+      "title": "Reps in reserve (RIR) and autoregulated training",
+      "file": "sources/rir-autoregulation.md",
+      "url": "https://pubmed.ncbi.nlm.nih.gov/27007587/",
+      "origin": "Peer-reviewed review on RPE/RIR-based autoregulation, curated summary",
+      "topics": ["rir", "rpe", "autoregulation"]
+    },
+    {
+      "id": "deload-and-fatigue-management",
+      "title": "Deloading and fatigue management",
+      "file": "sources/deload-and-fatigue-management.md",
+      "url": "https://www.acsm.org/education-resources/trending-topics-resources/exercise-is-medicine/fatigue-management",
+      "origin": "ACSM resource on training fatigue and recovery, curated summary",
+      "topics": ["deload", "fatigue", "volume reduction"]
+    },
+    {
+      "id": "sleep-recovery-readiness",
+      "title": "Sleep, resting heart rate, and training readiness",
+      "file": "sources/sleep-recovery-readiness.md",
+      "url": "https://pubmed.ncbi.nlm.nih.gov/28459784/",
+      "origin": "Peer-reviewed review on sleep and resting heart rate as recovery markers, curated summary",
+      "topics": ["sleep", "resting heart rate", "readiness"]
+    },
+    {
+      "id": "pain-vs-soreness-safety",
+      "title": "Distinguishing delayed-onset soreness from injury signals",
+      "file": "sources/pain-vs-soreness-safety.md",
+      "url": "https://www.physio-pedia.com/Delayed_Onset_Muscle_Soreness",
+      "origin": "Physiopedia clinical reference on DOMS vs. injury signs, curated summary",
+      "topics": ["pain", "safety", "doms", "injury screening"]
+    },
+    {
+      "id": "volume-landmarks",
+      "title": "Training volume landmarks (MEV, MAV, MRV)",
+      "file": "sources/volume-landmarks.md",
+      "url": "https://www.strongerbyscience.com/volume-landmarks/",
+      "origin": "Stronger By Science article on volume landmarks, curated summary",
+      "topics": ["volume", "mev", "mav", "mrv"]
+    },
+    {
+      "id": "exercise-swap-principles",
+      "title": "Principles for swapping exercises without losing training effect",
+      "file": "sources/exercise-swap-principles.md",
+      "url": "https://www.strengthandconditioningjournal.com/exercise-selection-substitution",
+      "origin": "Strength & Conditioning Journal guidance on exercise substitution, curated summary",
+      "topics": ["swap", "exercise selection", "substitution"]
+    }
+  ]
+}
