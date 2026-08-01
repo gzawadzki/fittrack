@@ -4,6 +4,14 @@ Owner: Agent 0 (M0 — integrator / build foundation). Exclusive paths:
 `settings.gradle.kts`, root `build.gradle.kts`, `gradle/`, `gradlew*`, `app/`,
 `docs/architecture.md`.
 
+**Update:** Agent M1 landed real `core/model`, `core/training`, `core/database` on their own
+branch (`worktree-agent-a6e2aa58446bc0edb`) and asked M0 to wire it in. The M0 placeholder
+shells for those three modules were removed and replaced with M1's actual implementation
+(`git checkout worktree-agent-a6e2aa58446bc0edb -- core/model core/training core/database`,
+then committed). `settings.gradle.kts` already declared the three includes from the original
+scaffold, so no further wiring was needed there. See `core/model/HANDOFF.md` for M1's own
+notes (public interfaces, business-rule test coverage, known limitations).
+
 ## What works (by inspection — see "Not verified" below for why it's not proven by a real run)
 
 - 13-module Gradle graph declared in `settings.gradle.kts`, matching
@@ -58,8 +66,9 @@ Known specific risks worth checking first when you do have a real environment:
    AGP/Gradle incompatibility on first run, bump `gradle/wrapper/gradle-wrapper.properties`'
    `distributionUrl` — do not downgrade AGP/Kotlin/Compose to work around it without updating
    `docs/architecture.md` section 5.
-2. **`kapt` + Room in `core/database`** was configured by pattern-matching the existing
-   `app/build.gradle.kts` (which already used `kapt` for Room) — never compiled.
+2. **`kapt` + Room in `core/database`** is now M1's real implementation (not an M0 placeholder)
+   but was, per M1's own handoff, also never compiled locally (no JDK in their environment
+   either) — same unverified status applies.
 3. **Compose BOM `2026.06.00`** and other pinned versions were carried over unchanged from
    the existing `app/build.gradle.kts` (already in the initial snapshot commit) — I did not
    independently verify every one resolves in a real Maven/Google repo lookup beyond
@@ -108,4 +117,7 @@ Known specific risks worth checking first when you do have a real environment:
 1. `feat(build): add gradle module structure and wrapper`
 2. `fix(app): compile against platform/reminders instead of missing classes`
 3. `docs(architecture): document module wiring, DI choice, and secrets`
-4. this file
+4. `docs(handoff): record M0 build-foundation handoff`
+5. `chore(build): remove core/model, core/training, core/database placeholders`
+6. `feat(build): bring in M1 core/model, core/training, core/database`
+7. this update

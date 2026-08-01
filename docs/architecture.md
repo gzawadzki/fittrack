@@ -25,11 +25,14 @@ feature:settings   (Android library, Compose) -> core:model, core:designsystem
 platform:reminders (Android library) -> core:model
 ```
 
-Every module besides `app`, `core:model`, and `core:training` currently contains only a
-`ModulePlaceholder` marker object (or, for `platform:reminders`, a minimal functional stub —
-see section 3) so the multi-module graph resolves and compiles from day one. Each placeholder
-file names its owning agent and the plan section describing what belongs there. Owning agents
-should delete the placeholder file when they add real content.
+`core:model`, `core:training`, and `core:database` now contain Agent M1's real implementation
+(domain types/repository contracts, progression/readiness/coach engines, Room entities/DAO/
+mappers/repository implementations — see `core/model/HANDOFF.md`), merged in from
+M1's branch. Every other module (`core:network`, `core:designsystem`, all six `feature/*`,
+and — apart from its functional stub, see section 3 — `platform:reminders`) still contains
+only a `ModulePlaceholder` marker object so the multi-module graph resolves and compiles from
+day one. Each placeholder file names its owning agent and the plan section describing what
+belongs there. Owning agents should delete the placeholder file when they add real content.
 
 `feature/*` modules do not depend on each other, per plan section 2. Room types are confined to
 `core/database` — no other module may import `androidx.room.*` types directly once M1 lands its
