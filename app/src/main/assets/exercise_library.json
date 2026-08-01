@@ -1,0 +1,11 @@
+[
+  {"name":"Goblet squat","movementPattern":"SQUAT","muscleRole":"QUADS","equipment":"DUMBBELL"},
+  {"name":"Hack squat","movementPattern":"SQUAT","muscleRole":"QUADS","equipment":"MACHINE"},
+  {"name":"Leg press","movementPattern":"SQUAT","muscleRole":"QUADS","equipment":"MACHINE"},
+  {"name":"Wyciskanie hantli leżąc","movementPattern":"HORIZONTAL_PUSH","muscleRole":"CHEST","equipment":"DUMBBELL"},
+  {"name":"Chest press","movementPattern":"HORIZONTAL_PUSH","muscleRole":"CHEST","equipment":"MACHINE"},
+  {"name":"Pompki","movementPattern":"HORIZONTAL_PUSH","muscleRole":"CHEST","equipment":"BODYWEIGHT"},
+  {"name":"Wiosłowanie hantlem","movementPattern":"HORIZONTAL_PULL","muscleRole":"BACK","equipment":"DUMBBELL"},
+  {"name":"Wiosłowanie na maszynie","movementPattern":"HORIZONTAL_PULL","muscleRole":"BACK","equipment":"MACHINE"},
+  {"name":"Odwrócone wiosłowanie","movementPattern":"HORIZONTAL_PULL","muscleRole":"BACK","equipment":"BODYWEIGHT"}
+]
