@@ -98,6 +98,22 @@ export const ENTITY_TABLES: Record<string, EntityDef> = {
       "completed_at",
     ],
   },
+  // Added by M6's Fitbit -> Health Connect pivot (see
+  // docs/adr/0001-fitbit-health-connect-pivot.md). Before this, these two
+  // tables were written only by the fitbit-sync Edge Function via the
+  // service-role client (never through sync-batch). Health Connect data
+  // originates on-device with no server-side puller, so the client now
+  // pushes it through the same sync-batch path as every other entity type.
+  // Column sets match 20260801060000_fitbit_schema.sql exactly -- no new
+  // migration was needed.
+  fitbit_daily_metrics: {
+    table: "fitbit_daily_metrics",
+    columns: ["metric_date", "sleep_minutes", "resting_heart_rate", "steps", "raw"],
+  },
+  fitbit_hr_exercise_aggregates: {
+    table: "fitbit_hr_exercise_aggregates",
+    columns: ["workout_session_id", "exercise_id", "avg_bpm", "max_bpm", "recovery_delta_bpm", "sample_count"],
+  },
 };
 
 // Read-only (via sync-batch pull) in addition to the writable tables above.
