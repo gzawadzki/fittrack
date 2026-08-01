@@ -3,35 +3,45 @@ package com.fittrack.feature.settings
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.fittrack.core.model.repository.HealthRepository
 import com.fittrack.core.network.AuthRepository
 import com.fittrack.core.network.AuthResult
-import com.fittrack.core.network.FitbitGateway
-import com.fittrack.core.network.FitbitGatewayState
-import com.fittrack.core.network.FitbitOAuthStartResult
-import com.fittrack.core.network.FitbitOperation
-import com.fittrack.core.network.FitbitRemoteSyncStatus
-import com.fittrack.core.network.FitbitSyncMode
-import com.fittrack.core.network.FitbitSyncRequest
-import com.fittrack.core.network.FitbitSyncResult
-import java.net.URI
+import com.fittrack.core.network.HealthConnectGateway
+import com.fittrack.core.network.HealthConnectSyncGateway
+import com.fittrack.core.network.SyncResult
+import com.fittrack.core.network.toHealthDays
+import java.time.Instant
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
+/**
+ * Health Connect permissions are granted through Android's system permission
+ * dialog (an Activity Result contract launched by SettingsRoute), not a
+ * browser redirect - see docs/adr/0001-fitbit-health-connect-pivot.md. This
+ * view model only tracks "have we been granted the permissions" and lets the
+ * UI layer own launching the actual system prompt.
+ *
+ * Business rule reminder (IMPLEMENTATION_PLAN.md section 5): step count /
+ * health signals are context only, never a standalone reason to change a
+ * plan or suggestion. Nothing here writes to PlanRepository/WorkoutRepository.
+ */
 class SettingsViewModel(
     private val authRepository: AuthRepository,
-    private val fitbitGateway: FitbitGateway,
+    private val healthConnectGateway: HealthConnectGateway,
+    private val healthRepository: HealthRepository,
+    private val healthConnectSyncGateway: HealthConnectSyncGateway,
+    private val now: () -> Instant = Instant::now,
 ) : ViewModel() {
     private val _state = MutableStateFlow(SettingsUiState())
     val state: StateFlow<SettingsUiState> = _state.asStateFlow()
 
     init {
-        observeFitbitState()
         loadSession()
+        refreshHealthConnectState()
     }
 
     fun retryLoad() {
@@ -119,128 +129,87 @@ class SettingsViewModel(
         }
     }
 
-    fun startFitbitOAuth(redirectUri: String) {
-        if (_state.value.isFitbitBusy) return
-        val previousConnectionState = _state.value.fitbitState
-        _state.update { it.copy(fitbitErrorMessage = null, fitbitAuthorizeUrl = null) }
+    /** Re-checks Health Connect availability/permission state. Called on init
+     * and after the UI's permission-request Activity Result returns. */
+    fun refreshHealthConnectState() {
         viewModelScope.launch {
-            try {
-                when (val result = fitbitGateway.startOAuth(redirectUri)) {
-                    is FitbitOAuthStartResult.Success -> if (result.authorizeUrl.isSafeHttpsAuthorizeUrl()) {
-                        _state.update {
-                            it.copy(
-                                fitbitState = FitbitConnectionState.AWAITING_CALLBACK,
-                                fitbitAuthorizeUrl = result.authorizeUrl,
-                                fitbitErrorMessage = null,
-                            )
-                        }
-                    } else {
-                        _state.update {
-                            it.copy(
-                                fitbitState = FitbitConnectionState.ERROR,
-                                fitbitAuthorizeUrl = null,
-                                fitbitErrorMessage = "Serwer zwrócił nieprawidłowy adres autoryzacji Fitbit.",
-                            )
-                        }
-                    }
-                    is FitbitOAuthStartResult.Failure -> _state.update {
-                        it.copy(
-                            fitbitState = FitbitConnectionState.ERROR,
-                            fitbitErrorMessage = result.error.userMessage,
-                        )
-                    }
-                }
-            } catch (cancelled: CancellationException) {
-                _state.update {
-                    it.copy(
-                        fitbitState = previousConnectionState,
-                        fitbitAuthorizeUrl = null,
-                    )
-                }
-                throw cancelled
-            } catch (_: Exception) {
-                _state.update {
-                    it.copy(
-                        fitbitState = FitbitConnectionState.ERROR,
-                        fitbitErrorMessage = "Nie można teraz rozpocząć połączenia z Fitbit.",
-                    )
-                }
-            }
+            checkHealthConnectPermissions()
         }
     }
 
-    fun consumeFitbitAuthorizeUrl() {
-        _state.update { it.copy(fitbitAuthorizeUrl = null) }
+    /** Called by the UI once the system permission dialog (launched via
+     * `PermissionController.createRequestPermissionResultContract()`) returns. */
+    fun onPermissionsResult(grantedPermissions: Set<String>) {
+        refreshHealthConnectState()
     }
 
-    fun reportFitbitAuthorizeLaunchFailure() {
+    private suspend fun checkHealthConnectPermissions() {
+        if (!healthConnectGateway.isAvailable()) {
+            _state.update {
+                it.copy(
+                    healthConnectState = HealthConnectState.UNAVAILABLE,
+                    requiredPermissions = emptySet(),
+                    healthConnectErrorMessage = null,
+                )
+            }
+            return
+        }
+        val required = healthConnectGateway.requiredPermissions()
+        val granted = try {
+            healthConnectGateway.hasAllPermissions()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            false
+        }
         _state.update {
             it.copy(
-                fitbitState = FitbitConnectionState.ERROR,
-                fitbitErrorMessage = "Nie można otworzyć strony autoryzacji Fitbit.",
-                fitbitAuthorizeUrl = null,
+                healthConnectState = if (granted) HealthConnectState.GRANTED else HealthConnectState.NOT_GRANTED,
+                requiredPermissions = required,
+                healthConnectErrorMessage = null,
             )
         }
     }
 
-    fun syncFitbitDailyMetrics() {
-        if (_state.value.isFitbitBusy) return
-        val previousSyncState = _state.value.fitbitSyncState
+    fun syncHealthConnect() {
+        if (_state.value.isHealthConnectBusy) return
+        if (_state.value.healthConnectState != HealthConnectState.GRANTED) return
         _state.update {
             it.copy(
-                fitbitSyncState = FitbitSyncState.SYNCING,
-                fitbitErrorMessage = null,
-                fitbitRetryAfterSeconds = null,
+                healthConnectSyncState = HealthConnectSyncState.SYNCING,
+                healthConnectErrorMessage = null,
             )
         }
         viewModelScope.launch {
             try {
-                when (val result = fitbitGateway.sync(FitbitSyncRequest(FitbitSyncMode.DAILY_METRICS))) {
-                    is FitbitSyncResult.Success -> _state.update {
+                val metrics = healthConnectGateway.readDailyMetrics()
+                healthRepository.upsertDailyHealth(metrics.toHealthDays())
+                when (val pushResult = healthConnectSyncGateway.pushDailyMetrics(metrics)) {
+                    is SyncResult.Success -> _state.update {
                         it.copy(
-                            fitbitState = FitbitConnectionState.CONNECTED,
-                            fitbitSyncState = when (result.status) {
-                                FitbitRemoteSyncStatus.PENDING,
-                                FitbitRemoteSyncStatus.PARTIAL,
-                                -> FitbitSyncState.PENDING
-                                FitbitRemoteSyncStatus.SYNCED -> FitbitSyncState.SYNCED
-                                FitbitRemoteSyncStatus.FAILED -> FitbitSyncState.ERROR
-                            },
-                            fitbitErrorMessage = if (result.status == FitbitRemoteSyncStatus.FAILED) {
-                                "Synchronizacja Fitbit nie została ukończona."
-                            } else {
-                                null
-                            },
-                            fitbitRetryAfterSeconds = result.retryAfterSeconds,
-                            fitbitImportedCounts = result.importedCounts,
+                            healthConnectSyncState = HealthConnectSyncState.SYNCED,
+                            lastSyncedAt = now(),
+                            lastSyncedDayCount = metrics.size,
+                            healthConnectErrorMessage = null,
                         )
                     }
-                    is FitbitSyncResult.Failure -> _state.update {
+                    is SyncResult.Failure -> _state.update {
                         it.copy(
-                            fitbitSyncState = FitbitSyncState.ERROR,
-                            fitbitErrorMessage = result.error.userMessage,
-                            fitbitRetryAfterSeconds = result.error.retryAfterSeconds,
+                            healthConnectSyncState = HealthConnectSyncState.ERROR,
+                            healthConnectErrorMessage = pushResult.error.userMessage,
                         )
                     }
                 }
             } catch (cancelled: CancellationException) {
-                _state.update { it.copy(fitbitSyncState = previousSyncState) }
+                _state.update { it.copy(healthConnectSyncState = HealthConnectSyncState.ERROR) }
                 throw cancelled
             } catch (_: Exception) {
                 _state.update {
                     it.copy(
-                        fitbitSyncState = FitbitSyncState.ERROR,
-                        fitbitErrorMessage = "Nie można teraz zsynchronizować Fitbit.",
+                        healthConnectSyncState = HealthConnectSyncState.ERROR,
+                        healthConnectErrorMessage = "Nie można teraz zsynchronizować danych zdrowotnych.",
                     )
                 }
-            }
-        }
-    }
-
-    private fun observeFitbitState() {
-        viewModelScope.launch {
-            fitbitGateway.state.collect { gatewayState ->
-                _state.update { current -> current.withGatewayState(gatewayState) }
             }
         }
     }
@@ -270,57 +239,20 @@ class SettingsViewModel(
     }
 
     companion object {
-        fun factory(authRepository: AuthRepository, fitbitGateway: FitbitGateway): ViewModelProvider.Factory =
+        fun factory(
+            authRepository: AuthRepository,
+            healthConnectGateway: HealthConnectGateway,
+            healthRepository: HealthRepository,
+            healthConnectSyncGateway: HealthConnectSyncGateway,
+        ): ViewModelProvider.Factory =
             object : ViewModelProvider.Factory {
                 @Suppress("UNCHECKED_CAST")
                 override fun <T : ViewModel> create(modelClass: Class<T>): T {
                     require(modelClass.isAssignableFrom(SettingsViewModel::class.java))
-                    return SettingsViewModel(authRepository, fitbitGateway) as T
+                    return SettingsViewModel(authRepository, healthConnectGateway, healthRepository, healthConnectSyncGateway) as T
                 }
             }
     }
 }
 
-private fun CharArray.clearSecurely() = fill('\u0000')
-
-private fun String.isSafeHttpsAuthorizeUrl(): Boolean = runCatching {
-    val uri = URI(this)
-    uri.scheme.equals("https", ignoreCase = true) && !uri.host.isNullOrBlank() && uri.userInfo == null
-}.getOrDefault(false)
-
-private fun SettingsUiState.withGatewayState(gatewayState: FitbitGatewayState): SettingsUiState = when (gatewayState) {
-    FitbitGatewayState.Disconnected -> copy(fitbitState = FitbitConnectionState.DISCONNECTED)
-    FitbitGatewayState.StartingOAuth -> copy(
-        fitbitState = FitbitConnectionState.STARTING_OAUTH,
-        fitbitErrorMessage = null,
-    )
-    FitbitGatewayState.AwaitingOAuthCallback -> if (
-        fitbitState == FitbitConnectionState.ERROR && fitbitErrorMessage != null
-    ) {
-        this
-    } else {
-        copy(
-            fitbitState = FitbitConnectionState.AWAITING_CALLBACK,
-            fitbitErrorMessage = null,
-        )
-    }
-    FitbitGatewayState.Connected -> copy(
-        fitbitState = FitbitConnectionState.CONNECTED,
-        fitbitErrorMessage = null,
-    )
-    is FitbitGatewayState.Syncing -> copy(
-        fitbitSyncState = FitbitSyncState.SYNCING,
-        fitbitErrorMessage = null,
-    )
-    is FitbitGatewayState.Failure -> when (gatewayState.operation) {
-        FitbitOperation.SYNC -> copy(
-            fitbitSyncState = FitbitSyncState.ERROR,
-            fitbitErrorMessage = gatewayState.error.userMessage,
-            fitbitRetryAfterSeconds = gatewayState.error.retryAfterSeconds,
-        )
-        FitbitOperation.OAUTH_START, FitbitOperation.OAUTH_CALLBACK -> copy(
-            fitbitState = FitbitConnectionState.ERROR,
-            fitbitErrorMessage = gatewayState.error.userMessage,
-        )
-    }
-}
+private fun CharArray.clearSecurely() = fill(' ')

@@ -1,41 +1,49 @@
 package com.fittrack.feature.settings
 
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalUriHandler
+import androidx.health.connect.client.PermissionController
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.fittrack.core.model.repository.HealthRepository
 import com.fittrack.core.network.AuthRepository
-import com.fittrack.core.network.FitbitGateway
+import com.fittrack.core.network.HealthConnectGateway
+import com.fittrack.core.network.HealthConnectSyncGateway
 
 @Composable
 fun SettingsRoute(
     authRepository: AuthRepository,
-    fitbitGateway: FitbitGateway,
-    fitbitOAuthRedirectUri: String,
+    healthConnectGateway: HealthConnectGateway,
+    healthRepository: HealthRepository,
+    healthConnectSyncGateway: HealthConnectSyncGateway,
     modifier: Modifier = Modifier,
     viewModel: SettingsViewModel = viewModel(
-        factory = SettingsViewModel.factory(authRepository, fitbitGateway),
+        factory = SettingsViewModel.factory(
+            authRepository,
+            healthConnectGateway,
+            healthRepository,
+            healthConnectSyncGateway,
+        ),
     ),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
-    val uriHandler = LocalUriHandler.current
-    LaunchedEffect(state.fitbitAuthorizeUrl) {
-        state.fitbitAuthorizeUrl?.let { authorizeUrl ->
-            val opened = runCatching { uriHandler.openUri(authorizeUrl) }.isSuccess
-            if (opened) viewModel.consumeFitbitAuthorizeUrl()
-            else viewModel.reportFitbitAuthorizeLaunchFailure()
-        }
-    }
+
+    // Health Connect permissions are a system permission dialog (Activity
+    // Result contract), not a browser redirect - see
+    // docs/adr/0001-fitbit-health-connect-pivot.md.
+    val permissionLauncher = rememberLauncherForActivityResult(
+        contract = PermissionController.createRequestPermissionResultContract(),
+    ) { grantedPermissions -> viewModel.onPermissionsResult(grantedPermissions) }
+
     SettingsScreen(
         state = state,
         onLogin = viewModel::signIn,
         onLogout = viewModel::signOut,
         onRetry = viewModel::retryLoad,
-        onConnectFitbit = { viewModel.startFitbitOAuth(fitbitOAuthRedirectUri) },
-        onSyncFitbit = viewModel::syncFitbitDailyMetrics,
+        onGrantHealthConnectPermissions = { permissionLauncher.launch(state.requiredPermissions) },
+        onSyncHealthConnect = viewModel::syncHealthConnect,
         modifier = modifier,
     )
 }
