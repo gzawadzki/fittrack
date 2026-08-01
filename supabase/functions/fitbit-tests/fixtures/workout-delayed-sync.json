@@ -1,0 +1,37 @@
+{
+  "description": "Simulates a workout that just finished: Fitbit has not ingested the device's HR data yet on the first sync attempt (empty dataset within the 20-minute grace window), then has it available on a later poll.",
+  "workout": {
+    "id": "9c9b1e2e-1111-4a11-8a11-000000000001",
+    "userId": "8f8f8f8f-2222-4b22-9b22-000000000002",
+    "startedAtIso": "2026-08-01T10:00:00.000Z",
+    "endedAtIso": "2026-08-01T10:45:00.000Z"
+  },
+  "exercises": [
+    {
+      "exerciseId": "ex-squat",
+      "startIso": "2026-08-01T10:02:00.000Z",
+      "endIso": "2026-08-01T10:12:00.000Z"
+    },
+    {
+      "exerciseId": "ex-bench",
+      "startIso": "2026-08-01T10:15:00.000Z",
+      "endIso": "2026-08-01T10:25:00.000Z"
+    },
+    {
+      "exerciseId": "ex-not-worn",
+      "startIso": "2026-08-01T10:30:00.000Z",
+      "endIso": "2026-08-01T10:32:00.000Z"
+    }
+  ],
+  "firstAttemptResponse": {
+    "activities-heart-intraday": {
+      "dataset": []
+    }
+  },
+  "secondAttemptResponse": {
+    "activities-heart-intraday": {
+      "datasetGeneratedFrom": "synthetic-fixture",
+      "note": "dense per-second samples across ex-squat and ex-bench windows only; ex-not-worn has zero overlapping samples on purpose"
+    }
+  }
+}
