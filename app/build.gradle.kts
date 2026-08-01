@@ -47,6 +47,8 @@ android {
 kapt { correctErrorTypes = true }
 
 dependencies {
+    implementation(project(":platform:reminders"))
+
     val composeBom = platform("androidx.compose:compose-bom:2026.06.00")
     implementation(composeBom)
     androidTestImplementation(composeBom)
