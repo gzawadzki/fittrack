@@ -29,16 +29,8 @@
             </intent-filter>
         </activity>
 
-        <receiver
-            android:name=".reminders.BootReceiver"
-            android:enabled="true"
-            android:exported="false">
-            <intent-filter>
-                <action android:name="android.intent.action.BOOT_COMPLETED" />
-                <action android:name="android.intent.action.TIMEZONE_CHANGED" />
-                <action android:name="android.intent.action.TIME_SET" />
-            </intent-filter>
-        </receiver>
+        <!-- BootReceiver is declared in platform/reminders' own manifest and merges in
+             automatically; see docs/architecture.md for the module wiring note. -->
     </application>
 </manifest>
 
