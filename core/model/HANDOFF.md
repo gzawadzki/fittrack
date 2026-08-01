@@ -173,6 +173,7 @@ interface WorkoutRepository {
     suspend fun getSetLogs(exerciseSessionId: String): List<SetLog>
     suspend fun getExerciseSessionHistory(planExerciseId: String, excludeWorkoutId: String? = null, limit: Int = 10): List<ExerciseSession>
     suspend fun startWorkout(planId: String): WorkoutSession
+    suspend fun startExercise(exerciseSessionId: String)
     suspend fun completeSet(setId: String, reps: Int, weightKg: Double, rir: Int?, pain: Boolean, techniqueIssue: Boolean, concerningSymptom: Boolean): SetLog
     suspend fun finishExercise(exerciseSessionId: String, note: String)
     suspend fun skipExercise(exerciseSessionId: String, reason: String)
@@ -189,6 +190,12 @@ interface HealthRepository {
     fun observeDailyHealth(limit: Int = 30): Flow<List<HealthDay>>
     suspend fun getRecentHealth(days: Int = 14): List<HealthDay>
     suspend fun upsertDailyHealth(days: List<HealthDay>)
+}
+
+interface CoachGateway {
+    suspend fun getBriefing(): CoachBriefing
+    suspend fun sendMessage(message: String): CoachReply
+    suspend fun getDebrief(workoutSessionId: String): CoachReply
 }
 ```
 

@@ -1,103 +1,115 @@
 package com.fittrack.app.ui
 
-import android.app.Application
-import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.fittrack.app.FitTrackApplication
-import com.fittrack.app.data.FitTrackRepository
-import com.fittrack.app.data.local.*
-import com.fittrack.app.domain.ReadinessCalculator
-import com.fittrack.app.domain.ReadinessLevel
-import com.fittrack.app.domain.RecoveryDay
-import kotlinx.coroutines.flow.*
+import com.fittrack.core.model.UserProfile
+import com.fittrack.core.model.WorkoutSession
+import com.fittrack.core.model.WorkoutStatus
+import com.fittrack.core.model.repository.ProfileRepository
+import com.fittrack.core.model.repository.WorkoutRepository
+import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneId
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.mapLatest
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
-data class AppMessage(val text: String, val isError: Boolean = false)
+data class AppUiState(
+    val loading: Boolean = true,
+    val profile: UserProfile? = null,
+    val activeWorkout: WorkoutSession? = null,
+    val insights: DashboardInsights = DashboardInsights(),
+    val error: String? = null,
+)
 
-class FitTrackViewModel(application: Application) : AndroidViewModel(application) {
-    private val repository = (application as FitTrackApplication).repository
+data class DashboardInsights(
+    val workoutCountsByDay: Map<LocalDate, Int> = emptyMap(),
+    val personalRecords: List<PersonalRecordUi> = emptyList(),
+    val completedWorkoutCount: Int = 0,
+)
 
-    val profile = repository.profile.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
-    val plans = repository.plans.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
-    val activeWorkout = repository.activeWorkout.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
-    val history = repository.history.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
-    val health = repository.health.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
-    val suggestions = repository.suggestions.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+data class PersonalRecordUi(
+    val exerciseName: String,
+    val weightKg: Double,
+    val reps: Int,
+    val estimatedOneRepMaxKg: Double,
+    val achievedAt: Instant,
+)
 
-    val exerciseSessions: StateFlow<List<ExerciseSessionEntity>> = activeWorkout
-        .flatMapLatest { workout -> workout?.let { repository.exerciseSessions(it.id) } ?: flowOf(emptyList()) }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+class FitTrackViewModel(
+    profileRepository: ProfileRepository,
+    private val workoutRepository: WorkoutRepository,
+) : ViewModel() {
+    private val error = MutableStateFlow<String?>(null)
+    private val insights = workoutRepository.observeHistory(limit = 120)
+        .mapLatest { workouts -> workoutRepository.buildDashboardInsights(workouts) }
 
-    val currentExercise: StateFlow<ExerciseSessionEntity?> = exerciseSessions
-        .map { sessions -> sessions.firstOrNull { it.status == "ACTIVE" } }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
-
-    val currentSets: StateFlow<List<SetLogEntity>> = currentExercise
-        .flatMapLatest { exercise -> exercise?.let { repository.setLogs(it.id) } ?: flowOf(emptyList()) }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
-
-    val readiness: StateFlow<ReadinessLevel> = health.map { rows ->
-        val ordered = rows.sortedBy { it.date }
-        val today = ordered.lastOrNull() ?: return@map ReadinessLevel.UNKNOWN
-        ReadinessCalculator.calculate(
-            RecoveryDay(today.sleepMinutes, today.restingHeartRate),
-            ordered.dropLast(1).map { RecoveryDay(it.sleepMinutes, it.restingHeartRate) },
-        )
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ReadinessLevel.UNKNOWN)
-
-    private val _message = MutableStateFlow<AppMessage?>(null)
-    val message = _message.asStateFlow()
-    private val _swapCandidates = MutableStateFlow<List<ExerciseEntity>>(emptyList())
-    val swapCandidates = _swapCandidates.asStateFlow()
-
-    fun clearMessage() { _message.value = null }
-
-    fun saveProfile(goal: String, experience: String, equipment: String, schedule: String, constraints: String, preferences: String) = runAction {
-        require(goal.isNotBlank()) { "Podaj główny cel" }
-        repository.saveProfile(goal, experience, equipment, schedule, constraints, preferences)
-        _message.value = AppMessage("Profil trenera został zatwierdzony")
+    val state: StateFlow<AppUiState> = combine(
+        profileRepository.observeProfile(),
+        workoutRepository.observeActiveWorkout(),
+        insights,
+        error,
+    ) { profile, workout, dashboardInsights, message ->
+        AppUiState(false, profile, workout, dashboardInsights, message)
     }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), AppUiState())
 
-    fun startWorkout(planId: String) = runAction { repository.startWorkout(planId) }
-
-    fun createPlan(name: String, exercises: List<FitTrackRepository.NewPlanExercise>) = runAction {
-        repository.createPlan(name, name, exercises)
-        _message.value = AppMessage("Plan został dodany")
-    }
-
-    fun completeSet(set: SetLogEntity, reps: Int, weight: Double, rir: Int?, pain: Boolean, technique: Boolean) = runAction {
-        repository.completeSet(
-            set.id, set.exerciseSessionId, set.position, set.setType, set.targetRepMin, set.targetRepMax,
-            set.targetRir, set.targetWeightKg, reps, weight, rir, pain, technique,
-        )
-    }
-
-    fun finishExercise(id: String, note: String) = runAction { repository.finishExercise(id, note) }
-    fun skipExercise(id: String, reason: String) = runAction { repository.skipExercise(id, reason) }
-
-    fun loadSwapCandidates(id: String, equipment: String) = runAction {
-        val available = equipment.split(',').map { it.trim().uppercase() }.filter { it.isNotEmpty() }
-        _swapCandidates.value = repository.swapCandidates(id, available.ifEmpty { listOf("BARBELL", "DUMBBELL", "CABLE", "MACHINE", "BODYWEIGHT") })
-    }
-
-    fun swapExercise(id: String, replacementId: String) = runAction {
-        repository.swapExercise(id, replacementId)
-        _swapCandidates.value = emptyList()
-    }
-
-    fun finishWorkout(id: String, note: String) = runAction {
-        repository.finishWorkout(id, note, readiness.value)
-        _message.value = AppMessage("Trening zapisany. Import tętna czeka na synchronizację Fitbit.")
-    }
-
-    fun decideSuggestion(id: String, accept: Boolean) = runAction {
-        repository.decideSuggestion(id, accept)
-        _message.value = AppMessage(if (accept) "Zmiana zastosowana w planie" else "Sugestia odrzucona")
-    }
-
-    private fun runAction(block: suspend () -> Unit) {
+    fun startWorkout(planId: String) {
         viewModelScope.launch {
-            runCatching { block() }.onFailure { _message.value = AppMessage(it.message ?: "Nieznany błąd", true) }
+            try {
+                error.value = null
+                workoutRepository.startWorkout(planId)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Throwable) {
+                error.value = "Nie udało się rozpocząć treningu."
+            }
         }
     }
+
+    fun clearError() = error.update { null }
+}
+
+private suspend fun WorkoutRepository.buildDashboardInsights(workouts: List<WorkoutSession>): DashboardInsights {
+    val completed = workouts.filter { it.status == WorkoutStatus.COMPLETED }
+    val zone = ZoneId.systemDefault()
+    val counts = completed.groupingBy { it.startedAt.atZone(zone).toLocalDate() }.eachCount()
+    val records = mutableMapOf<String, PersonalRecordUi>()
+    completed.forEach { workout ->
+        getExerciseSessions(workout.id).forEach { exercise ->
+            getSetLogs(exercise.id)
+                .filter { set ->
+                    set.completedAt != null &&
+                        set.actualWeightKg != null &&
+                        (set.actualReps ?: 0) > 0
+                }
+                .forEach { set ->
+                    val weight = checkNotNull(set.actualWeightKg)
+                    val reps = checkNotNull(set.actualReps)
+                    val estimate = weight * (1.0 + reps / 30.0)
+                    val candidate = PersonalRecordUi(
+                        exerciseName = exercise.exerciseName,
+                        weightKg = weight,
+                        reps = reps,
+                        estimatedOneRepMaxKg = estimate,
+                        achievedAt = checkNotNull(set.completedAt),
+                    )
+                    val current = records[exercise.exerciseName]
+                    if (current == null || candidate.estimatedOneRepMaxKg > current.estimatedOneRepMaxKg) {
+                        records[exercise.exerciseName] = candidate
+                    }
+                }
+        }
+    }
+    return DashboardInsights(
+        workoutCountsByDay = counts,
+        personalRecords = records.values.sortedByDescending { it.achievedAt }.take(3),
+        completedWorkoutCount = completed.size,
+    )
 }

@@ -148,6 +148,8 @@ test("delayed Fitbit sync: first attempt defers to PENDING, second attempt reach
   assert.equal(attempt2.status, "SYNCED");
   assert.equal(attempt2.retryAfterSeconds, null);
   assert.equal(attempt2.importedSampleCount, 7);
+  assert.equal(attempt2.samples.length, 7);
+  assert.equal(attempt2.aggregates.length, 3);
   assert.equal(harness.statusRows.get(fixture.workout.id)?.status, "SYNCED");
 
   const squat = harness.savedAggregates.find((a) => a.exerciseId === "ex-squat");

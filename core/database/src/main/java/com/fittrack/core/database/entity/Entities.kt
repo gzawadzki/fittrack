@@ -1,6 +1,7 @@
 package com.fittrack.core.database.entity
 
 import androidx.room.Entity
+import androidx.room.ColumnInfo
 import androidx.room.ForeignKey
 import androidx.room.Index
 import androidx.room.PrimaryKey
@@ -17,7 +18,7 @@ import androidx.room.PrimaryKey
 
 @Entity(tableName = "user_profile")
 data class UserProfileEntity(
-    @PrimaryKey val id: String = "me",
+    @PrimaryKey val id: String,
     val goal: String,
     val experience: String,
     val equipmentCsv: String,
@@ -27,6 +28,8 @@ data class UserProfileEntity(
     val approved: Boolean,
     val version: Int = 1,
     val updatedAt: Long,
+    val serverVersion: Int? = null,
+    val deletedAt: Long? = null,
 )
 
 @Entity(tableName = "exercises", indices = [Index("movementPattern"), Index("equipment")])
@@ -38,6 +41,7 @@ data class ExerciseEntity(
     val equipment: String,
     val active: Boolean = true,
     val updatedAt: Long,
+    val serverVersion: Int? = null,
     val deletedAt: Long? = null,
 )
 
@@ -51,6 +55,7 @@ data class WorkoutPlanEntity(
     val version: Int = 1,
     val active: Boolean = true,
     val updatedAt: Long,
+    val serverVersion: Int? = null,
     val deletedAt: Long? = null,
 )
 
@@ -77,6 +82,8 @@ data class PlanExerciseEntity(
     val weightIncrementKg: Double,
     val notes: String = "",
     val updatedAt: Long,
+    val serverVersion: Int? = null,
+    val deletedAt: Long? = null,
 )
 
 @Entity(tableName = "workout_sessions", indices = [Index("planId"), Index("status")])
@@ -95,6 +102,7 @@ data class WorkoutSessionEntity(
     val note: String = "",
     val fitbitSyncStatus: String = "NOT_REQUESTED",
     val updatedAt: Long,
+    val serverVersion: Int? = null,
     val deletedAt: Long? = null,
 )
 
@@ -119,6 +127,8 @@ data class ExerciseSessionEntity(
     val skipReason: String = "",
     val note: String = "",
     val updatedAt: Long,
+    val serverVersion: Int? = null,
+    val deletedAt: Long? = null,
 )
 
 @Entity(
@@ -143,6 +153,8 @@ data class SetLogEntity(
     val concerningSymptom: Boolean = false,
     val completedAt: Long? = null,
     val updatedAt: Long,
+    val serverVersion: Int? = null,
+    val deletedAt: Long? = null,
 )
 
 @Entity(tableName = "health_daily")
@@ -171,6 +183,9 @@ data class CoachSuggestionEntity(
     val decisionReason: String = "",
     val createdAt: Long,
     val decidedAt: Long? = null,
+    @ColumnInfo(defaultValue = "0") val updatedAt: Long = createdAt,
+    val serverVersion: Int? = null,
+    val deletedAt: Long? = null,
 )
 
 @Entity(tableName = "cardio_activities", indices = [Index("startedAt")])
@@ -215,9 +230,19 @@ data class SyncOutboxEntity(
     val entityId: String,
     val operation: String,
     val payloadJson: String,
+    val baseVersion: Int? = null,
     val version: Int,
     val status: String = "PENDING",
+    val activeBatchId: String? = null,
     val attemptCount: Int = 0,
     val createdAt: Long,
     val lastAttemptAt: Long? = null,
+)
+
+@Entity(tableName = "sync_state")
+data class SyncStateEntity(
+    @PrimaryKey val singletonId: Int = 1,
+    val cursor: Long = 0L,
+    val activeBatchId: String? = null,
+    val blockedReason: String? = null,
 )

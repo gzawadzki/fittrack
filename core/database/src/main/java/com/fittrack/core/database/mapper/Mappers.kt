@@ -1,22 +1,28 @@
 package com.fittrack.core.database.mapper
 
 import com.fittrack.core.database.entity.CoachSuggestionEntity
+import com.fittrack.core.database.entity.CardioActivityEntity
 import com.fittrack.core.database.entity.ExerciseEntity
 import com.fittrack.core.database.entity.ExerciseSessionEntity
+import com.fittrack.core.database.entity.ExerciseHrSummaryEntity
 import com.fittrack.core.database.entity.HealthDailyEntity
+import com.fittrack.core.database.entity.HeartRateSampleEntity
 import com.fittrack.core.database.entity.PlanExerciseEntity
 import com.fittrack.core.database.entity.SetLogEntity
 import com.fittrack.core.database.entity.UserProfileEntity
 import com.fittrack.core.database.entity.WorkoutPlanEntity
 import com.fittrack.core.database.entity.WorkoutSessionEntity
 import com.fittrack.core.model.Citation
+import com.fittrack.core.model.CardioActivity
 import com.fittrack.core.model.CoachSuggestion
 import com.fittrack.core.model.Confidence
 import com.fittrack.core.model.Exercise
 import com.fittrack.core.model.ExerciseSession
+import com.fittrack.core.model.ExerciseHeartRateSummary
 import com.fittrack.core.model.ExerciseSessionStatus
 import com.fittrack.core.model.FitbitSyncStatus
 import com.fittrack.core.model.HealthDay
+import com.fittrack.core.model.HeartRateSample
 import com.fittrack.core.model.PlanExercise
 import com.fittrack.core.model.PlanExerciseSnapshot
 import com.fittrack.core.model.PlannedSet
@@ -327,6 +333,63 @@ fun HealthDay.toEntity(syncedAt: Long): HealthDailyEntity = HealthDailyEntity(
     source = source,
     syncedAt = syncedAt,
 )
+
+fun CardioActivityEntity.toDomain(): CardioActivity = CardioActivity(
+    id = id,
+    sourceId = sourceId,
+    kind = kind,
+    startedAt = Instant.ofEpochMilli(startedAt),
+    endedAt = Instant.ofEpochMilli(endedAt),
+    durationSeconds = durationSeconds,
+    distanceMeters = distanceMeters,
+    steps = steps,
+    averageHeartRate = averageHeartRate,
+)
+
+fun CardioActivity.toEntity(id: String, syncedAt: Long): CardioActivityEntity = CardioActivityEntity(
+    id = id,
+    sourceId = sourceId,
+    kind = kind,
+    startedAt = startedAt.toEpochMilli(),
+    endedAt = endedAt.toEpochMilli(),
+    durationSeconds = durationSeconds,
+    distanceMeters = distanceMeters,
+    steps = steps,
+    averageHeartRate = averageHeartRate,
+    syncedAt = syncedAt,
+)
+
+fun HeartRateSampleEntity.toDomain(): HeartRateSample = HeartRateSample(
+    workoutSessionId = workoutSessionId,
+    sampledAt = Instant.ofEpochMilli(sampledAt),
+    bpm = bpm,
+)
+
+fun HeartRateSample.toEntity(): HeartRateSampleEntity = HeartRateSampleEntity(
+    workoutSessionId = workoutSessionId,
+    sampledAt = sampledAt.toEpochMilli(),
+    bpm = bpm,
+)
+
+fun ExerciseHrSummaryEntity.toDomain(): ExerciseHeartRateSummary = ExerciseHeartRateSummary(
+    exerciseSessionId = exerciseSessionId,
+    averageBpm = averageBpm,
+    maximumBpm = maximumBpm,
+    recoveryDeltaBpm = recoveryDeltaBpm,
+    sampleCount = sampleCount,
+)
+
+fun ExerciseHeartRateSummary.toEntity(computedAt: Long): ExerciseHrSummaryEntity {
+    require(hasData) { "A no-data HR aggregate must not be persisted" }
+    return ExerciseHrSummaryEntity(
+        exerciseSessionId = exerciseSessionId,
+        averageBpm = requireNotNull(averageBpm),
+        maximumBpm = requireNotNull(maximumBpm),
+        recoveryDeltaBpm = recoveryDeltaBpm,
+        sampleCount = sampleCount,
+        computedAt = computedAt,
+    )
+}
 
 // ---- coach suggestions ---------------------------------------------------
 

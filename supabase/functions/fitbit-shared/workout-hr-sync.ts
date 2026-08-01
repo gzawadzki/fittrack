@@ -81,6 +81,8 @@ export interface WorkoutHrSyncResult {
   status: SyncStatus;
   retryAfterSeconds: number | null;
   importedSampleCount: number;
+  samples: HrSample[];
+  aggregates: ExerciseHrAggregate[];
 }
 
 export interface WorkoutHrSyncDeps {
@@ -149,7 +151,13 @@ export async function syncWorkoutHr(
         failureReason: "fitbit_reauth_required",
       };
       await deps.statusStore.save(failed);
-      return { status: "FAILED", retryAfterSeconds: null, importedSampleCount: 0 };
+      return {
+        status: "FAILED",
+        retryAfterSeconds: null,
+        importedSampleCount: 0,
+        samples: [],
+        aggregates: [],
+      };
     }
 
     if (decision.kind === "wait_and_retry") {
@@ -165,6 +173,8 @@ export async function syncWorkoutHr(
         status: "PENDING",
         retryAfterSeconds: decision.retryAfterSeconds,
         importedSampleCount: 0,
+        samples: [],
+        aggregates: [],
       };
     }
 
@@ -175,7 +185,13 @@ export async function syncWorkoutHr(
         failureReason: decision.reason,
       };
       await deps.statusStore.save(failed);
-      return { status: "FAILED", retryAfterSeconds: null, importedSampleCount: 0 };
+      return {
+        status: "FAILED",
+        retryAfterSeconds: null,
+        importedSampleCount: 0,
+        samples: [],
+        aggregates: [],
+      };
     }
 
     const body = await res.json();
@@ -208,7 +224,13 @@ export async function syncWorkoutHr(
           (Date.parse(emptyDecision.nextRetryAt) - Date.parse(now())) / 1000,
         ),
       );
-      return { status: "PENDING", retryAfterSeconds, importedSampleCount: 0 };
+      return {
+        status: "PENDING",
+        retryAfterSeconds,
+        importedSampleCount: 0,
+        samples: [],
+        aggregates: [],
+      };
     }
     // else "ok": genuinely no data (e.g. device not worn) -- fall through
     // and persist empty/null aggregates, marked SYNCED so we don't retry
@@ -234,5 +256,7 @@ export async function syncWorkoutHr(
     status: "SYNCED",
     retryAfterSeconds: null,
     importedSampleCount: collected.length,
+    samples: collected,
+    aggregates,
   };
 }

@@ -4,7 +4,6 @@ import androidx.room.withTransaction
 import com.fittrack.core.database.FitTrackDatabase
 import com.fittrack.core.database.entity.ExerciseSessionEntity
 import com.fittrack.core.database.entity.SetLogEntity
-import com.fittrack.core.database.entity.SyncOutboxEntity
 import com.fittrack.core.database.mapper.toDomain
 import com.fittrack.core.database.mapper.toEntity
 import com.fittrack.core.model.CoachSuggestion
@@ -18,6 +17,9 @@ import com.fittrack.core.model.WorkoutPlanSnapshot
 import com.fittrack.core.model.WorkoutSession
 import com.fittrack.core.model.WorkoutStatus
 import com.fittrack.core.model.repository.WorkoutRepository
+import com.fittrack.core.database.sync.SyncEntityType
+import com.fittrack.core.database.sync.SyncOutboxWriter
+import com.fittrack.core.database.sync.syncData
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import java.time.Instant
@@ -41,6 +43,7 @@ import java.util.UUID
  */
 class RoomWorkoutRepository(private val database: FitTrackDatabase) : WorkoutRepository {
     private val dao = database.dao()
+    private val outbox = SyncOutboxWriter(dao)
 
     override fun observeActiveWorkout(): Flow<WorkoutSession?> = dao.observeActiveWorkout().map { it?.toDomain() }
 
@@ -115,6 +118,7 @@ class RoomWorkoutRepository(private val database: FitTrackDatabase) : WorkoutRep
         }
         dao.insertExerciseSessions(exerciseSessionEntities)
 
+        val allSetEntities = mutableListOf<SetLogEntity>()
         exerciseSessionEntities.forEachIndexed { index, sessionEntity ->
             val plannedSets = snapshotExercises[index].plannedSets
             val setEntities = plannedSets.mapIndexed { position, set ->
@@ -131,10 +135,32 @@ class RoomWorkoutRepository(private val database: FitTrackDatabase) : WorkoutRep
                 )
             }
             dao.insertSetLogs(setEntities)
+            allSetEntities += setEntities
         }
 
-        enqueue("workout_session", workoutId, "UPSERT", now)
+        val workoutEntity = requireNotNull(dao.getWorkoutIncludingDeleted(workoutId))
+        outbox.upsert(SyncEntityType.WORKOUT_SESSIONS, workoutId, null, workoutEntity.syncData(), now)
+        exerciseSessionEntities.forEach { entity ->
+            outbox.upsert(SyncEntityType.EXERCISE_SESSIONS, entity.id, null, entity.syncData(), now)
+        }
+        allSetEntities.forEach { entity ->
+            outbox.upsert(SyncEntityType.SET_LOGS, entity.id, null, entity.syncData(), now)
+        }
         session
+    }
+
+    override suspend fun startExercise(exerciseSessionId: String) = database.withTransaction {
+        val workout = requireNotNull(dao.getActiveWorkout()) { "No active workout" }
+        val exercise = requireNotNull(dao.getExerciseSession(exerciseSessionId)) { "Exercise session does not exist" }
+        require(exercise.workoutSessionId == workout.id) { "Exercise does not belong to the active workout" }
+        require(exercise.status == "PENDING") { "Only a pending exercise can be started" }
+        val sessions = dao.getExerciseSessions(workout.id)
+        require(sessions.none { it.status == "ACTIVE" }) { "Finish or skip the active exercise first" }
+        require(sessions.none { it.position < exercise.position && it.status == "PENDING" }) { "Exercises must be started in plan order" }
+        val now = now()
+        val updated = exercise.copy(status = "ACTIVE", startedAt = now, updatedAt = now)
+        dao.updateExerciseSession(updated)
+        outbox.upsert(SyncEntityType.EXERCISE_SESSIONS, updated.id, updated.serverVersion, updated.syncData(), now)
     }
 
     override suspend fun completeSet(
@@ -145,11 +171,22 @@ class RoomWorkoutRepository(private val database: FitTrackDatabase) : WorkoutRep
         pain: Boolean,
         techniqueIssue: Boolean,
         concerningSymptom: Boolean,
-    ): SetLog {
-        require(reps in 0..100) { "Invalid rep count: $reps" }
-        require(weightKg in 0.0..1000.0) { "Invalid weight: $weightKg" }
+    ): SetLog = database.withTransaction {
+        require(reps in 1..100) { "Invalid rep count: $reps" }
+        require(weightKg.isFinite() && weightKg in 0.0..1000.0) { "Invalid weight: $weightKg" }
         require(rir == null || rir in 0..10) { "RIR must be 0..10" }
         val existing = requireNotNull(dao.getSetLog(setId)) { "Set $setId does not exist" }
+        val exercise = requireNotNull(dao.getExerciseSession(existing.exerciseSessionId)) { "Exercise session does not exist" }
+        require(exercise.status == "ACTIVE") { "Sets can only be logged for the active exercise" }
+        val workout = requireNotNull(dao.getWorkout(exercise.workoutSessionId)) { "Workout does not exist" }
+        require(workout.status == "ACTIVE") { "Sets can only be logged in the active workout" }
+        if (existing.completedAt != null) {
+            val identicalRetry = existing.actualReps == reps && existing.actualWeightKg == weightKg &&
+                existing.actualRir == rir && existing.pain == pain && existing.techniqueIssue == techniqueIssue &&
+                existing.concerningSymptom == concerningSymptom
+            require(identicalRetry) { "Completed set cannot be overwritten" }
+            return@withTransaction existing.toDomain()
+        }
         val now = now()
         val updated = existing.copy(
             actualReps = reps,
@@ -162,37 +199,44 @@ class RoomWorkoutRepository(private val database: FitTrackDatabase) : WorkoutRep
             updatedAt = now,
         )
         dao.updateSetLog(updated)
-        enqueue("set_log", setId, "UPSERT", now)
-        return updated.toDomain()
+        outbox.upsert(SyncEntityType.SET_LOGS, updated.id, updated.serverVersion, updated.syncData(), now)
+        updated.toDomain()
     }
 
     override suspend fun finishExercise(exerciseSessionId: String, note: String) = database.withTransaction {
         val current = requireNotNull(dao.getExerciseSession(exerciseSessionId))
+        require(current.status == "ACTIVE") { "Only the active exercise can be finished" }
+        require(dao.getWorkout(current.workoutSessionId)?.status == "ACTIVE") { "Workout is not active" }
+        require(dao.getSetLogs(exerciseSessionId).all { it.completedAt != null }) { "Complete every set before finishing the exercise" }
         val now = now()
-        dao.updateExerciseSession(current.copy(status = "COMPLETED", endedAt = now, note = note.trim(), updatedAt = now))
-        activateNext(current.workoutSessionId, current.position, now)
-        enqueue("exercise_session", exerciseSessionId, "UPSERT", now)
+        val updated = current.copy(status = "COMPLETED", endedAt = now, note = note.trim(), updatedAt = now)
+        dao.updateExerciseSession(updated)
+        outbox.upsert(SyncEntityType.EXERCISE_SESSIONS, updated.id, updated.serverVersion, updated.syncData(), now)
     }
 
     override suspend fun skipExercise(exerciseSessionId: String, reason: String) = database.withTransaction {
         val current = requireNotNull(dao.getExerciseSession(exerciseSessionId))
+        require(current.status == "ACTIVE" || current.status == "PENDING") { "Only an open exercise can be skipped" }
+        require(dao.getWorkout(current.workoutSessionId)?.status == "ACTIVE") { "Workout is not active" }
         val now = now()
-        dao.updateExerciseSession(
-            current.copy(status = "SKIPPED", skippedAt = now, endedAt = now, skipReason = reason.trim(), updatedAt = now),
-        )
-        activateNext(current.workoutSessionId, current.position, now)
-        enqueue("exercise_session", exerciseSessionId, "UPSERT", now)
+        val updated = current.copy(status = "SKIPPED", skippedAt = now, endedAt = now, skipReason = reason.trim(), updatedAt = now)
+        dao.updateExerciseSession(updated)
+        outbox.upsert(SyncEntityType.EXERCISE_SESSIONS, updated.id, updated.serverVersion, updated.syncData(), now)
     }
 
-    override suspend fun swapExercise(exerciseSessionId: String, replacementExerciseId: String) {
+    override suspend fun swapExercise(exerciseSessionId: String, replacementExerciseId: String) = database.withTransaction {
         val session = requireNotNull(dao.getExerciseSession(exerciseSessionId))
+        require(session.status == "ACTIVE" || session.status == "PENDING") { "Only an open exercise can be swapped" }
+        require(dao.getWorkout(session.workoutSessionId)?.status == "ACTIVE") { "Workout is not active" }
+        require(dao.getSetLogs(exerciseSessionId).none { it.completedAt != null }) { "Exercise cannot be swapped after its first completed set" }
         val replacement = requireNotNull(dao.getExercise(replacementExerciseId))
         val now = now()
         // Only this session's live exercise pointer changes — the plan template
         // (plan_exercises) is never touched, matching "swap by default does not
         // change the template".
-        dao.updateExerciseSession(session.copy(exerciseId = replacement.id, exerciseNameSnapshot = replacement.name, updatedAt = now))
-        enqueue("exercise_session", exerciseSessionId, "UPSERT", now)
+        val updated = session.copy(exerciseId = replacement.id, exerciseNameSnapshot = replacement.name, updatedAt = now)
+        dao.updateExerciseSession(updated)
+        outbox.upsert(SyncEntityType.EXERCISE_SESSIONS, updated.id, updated.serverVersion, updated.syncData(), now)
     }
 
     override suspend fun finishWorkout(workoutId: String, note: String): WorkoutSession = database.withTransaction {
@@ -201,19 +245,28 @@ class RoomWorkoutRepository(private val database: FitTrackDatabase) : WorkoutRep
         val now = now()
         val sessions = dao.getExerciseSessions(workoutId)
         sessions.filter { it.status == "ACTIVE" || it.status == "PENDING" }.forEach {
-            dao.updateExerciseSession(it.copy(status = "SKIPPED", skippedAt = now, endedAt = now, skipReason = "Workout finished", updatedAt = now))
+            val skipped = it.copy(status = "SKIPPED", skippedAt = now, endedAt = now, skipReason = "Workout finished", updatedAt = now)
+            dao.updateExerciseSession(skipped)
+            outbox.upsert(SyncEntityType.EXERCISE_SESSIONS, skipped.id, skipped.serverVersion, skipped.syncData(), now)
         }
         val updated = workout.copy(status = "COMPLETED", endedAt = now, note = note.trim(), fitbitSyncStatus = "PENDING", updatedAt = now)
         dao.updateWorkout(updated)
-        enqueue("workout_session", workoutId, "UPSERT", now)
+        outbox.upsert(SyncEntityType.WORKOUT_SESSIONS, updated.id, updated.serverVersion, updated.syncData(), now)
         updated.toDomain()
     }
 
     override suspend fun cancelWorkout(workoutId: String) = database.withTransaction {
         val workout = requireNotNull(dao.getWorkout(workoutId))
+        require(workout.status == "ACTIVE") { "Only an active workout can be cancelled" }
         val now = now()
-        dao.updateWorkout(workout.copy(status = "CANCELLED", endedAt = now, updatedAt = now))
-        enqueue("workout_session", workoutId, "UPSERT", now)
+        dao.getExerciseSessions(workoutId).filter { it.status == "ACTIVE" || it.status == "PENDING" }.forEach {
+            val skipped = it.copy(status = "SKIPPED", skippedAt = now, endedAt = now, skipReason = "Workout cancelled", updatedAt = now)
+            dao.updateExerciseSession(skipped)
+            outbox.upsert(SyncEntityType.EXERCISE_SESSIONS, skipped.id, skipped.serverVersion, skipped.syncData(), now)
+        }
+        val cancelled = workout.copy(status = "CANCELLED", endedAt = now, updatedAt = now)
+        dao.updateWorkout(cancelled)
+        outbox.upsert(SyncEntityType.WORKOUT_SESSIONS, cancelled.id, cancelled.serverVersion, cancelled.syncData(), now)
     }
 
     override fun observePendingSuggestions(): Flow<List<CoachSuggestion>> =
@@ -231,28 +284,11 @@ class RoomWorkoutRepository(private val database: FitTrackDatabase) : WorkoutRep
         require(suggestion.status == "PENDING") { "Suggestion $id was already decided" }
         val now = now()
         dao.updateSuggestion(
-            suggestion.copy(status = if (accept) "ACCEPTED" else "REJECTED", decisionReason = reason, decidedAt = now),
-        )
-        enqueue("coach_suggestion", id, "UPSERT", now)
-    }
-
-    private suspend fun activateNext(workoutId: String, currentPosition: Int, now: Long) {
-        dao.getExerciseSessions(workoutId)
-            .filter { it.position > currentPosition && it.status == "PENDING" }
-            .minByOrNull { it.position }
-            ?.let { dao.updateExerciseSession(it.copy(status = "ACTIVE", startedAt = now, updatedAt = now)) }
-    }
-
-    private suspend fun enqueue(entityType: String, entityId: String, operation: String, timestamp: Long) {
-        dao.enqueueSync(
-            SyncOutboxEntity(
-                id = UUID.randomUUID().toString(),
-                entityType = entityType,
-                entityId = entityId,
-                operation = operation,
-                payloadJson = "{\"id\":\"$entityId\"}",
-                version = 1,
-                createdAt = timestamp,
+            suggestion.copy(
+                status = if (accept) "ACCEPTED" else "REJECTED",
+                decisionReason = reason,
+                decidedAt = now,
+                updatedAt = now,
             ),
         )
     }

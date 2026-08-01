@@ -19,7 +19,7 @@ export interface EntityDef {
 export const ENTITY_TABLES: Record<string, EntityDef> = {
   user_profiles: {
     table: "user_profiles",
-    columns: ["goal", "experience", "equipment", "schedule", "constraints", "preferences", "approved"],
+    columns: ["goal", "experience", "equipment", "schedule", "constraints", "preferences", "approved", "profile_version"],
   },
   exercises: {
     table: "exercises",
@@ -27,7 +27,7 @@ export const ENTITY_TABLES: Record<string, EntityDef> = {
   },
   workout_plans: {
     table: "workout_plans",
-    columns: ["name", "day_label", "scheduled_day_of_week", "scheduled_minute_of_day", "active"],
+    columns: ["name", "day_label", "scheduled_day_of_week", "scheduled_minute_of_day", "active", "plan_version"],
   },
   plan_exercises: {
     table: "plan_exercises",
@@ -52,6 +52,8 @@ export const ENTITY_TABLES: Record<string, EntityDef> = {
       "plan_id",
       "plan_name_snapshot",
       "plan_version_snapshot",
+      "day_label_snapshot",
+      "plan_snapshot_json",
       "status",
       "started_at",
       "ended_at",

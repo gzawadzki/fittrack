@@ -1,5 +1,5 @@
 // POST /fitbit-oauth-start
-// Input:  { "redirectUri": "https://..." }
+// Input:  { "redirectUri": "fittrack://auth/fitbit" }
 // Output: { "authorizeUrl": "https://www.fitbit.com/oauth2/authorize?..." }
 //
 // Requires a Supabase JWT (Authorization: Bearer <token>), per the frozen
@@ -9,6 +9,10 @@
 import { buildAuthorizeUrl } from "../fitbit-shared/fitbit-api.ts";
 import { codeChallengeFromVerifier, randomUrlSafeToken } from "../fitbit-shared/pkce.ts";
 import { ERR, errorResponse, FitbitFunctionError } from "../fitbit-shared/errors.ts";
+import {
+  fitbitBackendCallbackUri,
+  requireAllowedAppRedirectUri,
+} from "../fitbit-shared/oauth-redirect.ts";
 import {
   getAuthenticatedUserId,
   getServiceRoleClient,
@@ -39,12 +43,13 @@ Deno.serve(async (req: Request) => {
     }
 
     const body = await req.json().catch(() => null);
-    const redirectUri = body?.redirectUri;
-    if (!redirectUri || typeof redirectUri !== "string") {
+    try {
+      requireAllowedAppRedirectUri(body?.redirectUri);
+    } catch {
       return errorResponse(
         new FitbitFunctionError({
           code: ERR.BAD_REQUEST,
-          message: "redirectUri is required",
+          message: "redirectUri is not allowlisted",
           httpStatus: 400,
         }),
       );
@@ -54,9 +59,12 @@ Deno.serve(async (req: Request) => {
     const clientId = Deno.env.get("FITBIT_CLIENT_ID");
     // @ts-ignore
     const clientSecret = Deno.env.get("FITBIT_CLIENT_SECRET");
-    if (!clientId || !clientSecret) {
-      throw new Error("Missing FITBIT_CLIENT_ID/FITBIT_CLIENT_SECRET secrets");
+    // @ts-ignore
+    const supabaseUrl = Deno.env.get("SUPABASE_URL");
+    if (!clientId || !clientSecret || !supabaseUrl) {
+      throw new Error("Missing Fitbit configuration");
     }
+    const backendCallbackUri = fitbitBackendCallbackUri(supabaseUrl);
 
     const state = randomUrlSafeToken(24);
     const codeVerifier = randomUrlSafeToken(48);
@@ -68,7 +76,10 @@ Deno.serve(async (req: Request) => {
       .insert({
         state,
         user_id: userId,
-        redirect_uri: redirectUri,
+        // Fitbit must return the authorization code to the HTTPS Edge
+        // Function. The allowlisted app deep link is used only after the
+        // backend has exchanged and persisted the tokens.
+        redirect_uri: backendCallbackUri,
         code_verifier: codeVerifier,
       });
     if (insertError) {
@@ -77,7 +88,7 @@ Deno.serve(async (req: Request) => {
 
     const authorizeUrl = buildAuthorizeUrl(
       { clientId, clientSecret },
-      redirectUri,
+      backendCallbackUri,
       state,
       codeChallenge,
     );

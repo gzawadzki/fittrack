@@ -33,6 +33,14 @@ test("missing sleep/RHR for a day is stored as null, not 0", async () => {
   assert.equal(result.importedCounts.sleep, 0);
   assert.equal(result.importedCounts.steps, 1);
   assert.equal(result.status, "SYNCED");
+  assert.deepEqual(result.dailyMetrics, [{
+    date: "2026-08-01",
+    sleepMinutes: null,
+    restingHeartRate: null,
+    steps: 8342,
+    source: "FITBIT",
+  }]);
+  assert.equal("raw" in result.dailyMetrics[0], false);
 });
 
 test("walk/run activities are imported, other activity types are filtered out", async () => {
@@ -66,6 +74,18 @@ test("walk/run activities are imported, other activity types are filtered out", 
   assert.equal(saved.length, 2);
   assert.deepEqual(saved.map((r) => r.fitbitLogId).sort(), ["1", "3"]);
   assert.equal(result.importedCounts.activities, 2);
+  assert.equal(result.cardioActivities.length, 2);
+  assert.deepEqual(result.cardioActivities[0], {
+    sourceId: "1",
+    kind: "Run",
+    startedAt: "2026-08-01T06:00:00.000Z",
+    endedAt: "2026-08-01T06:30:00.000Z",
+    durationSeconds: 1800,
+    distanceMeters: 5000,
+    steps: 6000,
+    averageHeartRate: null,
+  });
+  assert.equal("raw" in result.cardioActivities[0], false);
 });
 
 test("429 during daily sync surfaces PARTIAL status with retryAfter", async () => {

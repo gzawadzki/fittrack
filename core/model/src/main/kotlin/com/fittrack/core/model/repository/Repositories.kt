@@ -1,9 +1,13 @@
 package com.fittrack.core.model.repository
 
 import com.fittrack.core.model.CoachSuggestion
+import com.fittrack.core.model.CardioActivity
 import com.fittrack.core.model.Exercise
+import com.fittrack.core.model.ExerciseHeartRateSummary
 import com.fittrack.core.model.ExerciseSession
+import com.fittrack.core.model.FitbitDataPayload
 import com.fittrack.core.model.HealthDay
+import com.fittrack.core.model.HeartRateSample
 import com.fittrack.core.model.SetLog
 import com.fittrack.core.model.UserProfile
 import com.fittrack.core.model.WorkoutPlan
@@ -13,8 +17,8 @@ import kotlinx.coroutines.flow.Flow
 /**
  * Pure Kotlin repository contracts. No Room/Android types may appear here or
  * in any implementation's public surface — feature modules (M2/M3) code
- * against these interfaces using fakes; core/database provides the real
- * Room-backed implementations.
+ * directly against these interfaces; core/database provides the real
+ * Room-backed implementations and tests may provide fakes.
  */
 
 interface ProfileRepository {
@@ -91,6 +95,11 @@ interface WorkoutRepository {
      */
     suspend fun startWorkout(planId: String): WorkoutSession
 
+    /** Starts a pending exercise at the exact user-confirmed boundary. The
+     * first exercise is started with the workout; subsequent exercises wait
+     * for this call so inter-exercise rest is not attributed to exercise HR. */
+    suspend fun startExercise(exerciseSessionId: String)
+
     suspend fun completeSet(
         setId: String,
         reps: Int,
@@ -126,4 +135,17 @@ interface HealthRepository {
     suspend fun getRecentHealth(days: Int = 14): List<HealthDay>
 
     suspend fun upsertDailyHealth(days: List<HealthDay>)
+}
+
+interface FitbitDataRepository {
+    fun observeCardioActivities(): Flow<List<CardioActivity>>
+    fun observeHeartRateSamples(workoutSessionId: String? = null): Flow<List<HeartRateSample>>
+    fun observeExerciseHeartRateSummaries(
+        workoutSessionId: String? = null,
+    ): Flow<List<ExerciseHeartRateSummary>>
+
+    /** Persists one normalized Edge Function response in a single Room
+     * transaction. If a workout id is present, its Fitbit state is committed
+     * in the same transaction as samples and aggregates. */
+    suspend fun persist(payload: FitbitDataPayload)
 }

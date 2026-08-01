@@ -17,7 +17,6 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    kotlinOptions { jvmTarget = "17" }
 
     testOptions {
         unitTests.isIncludeAndroidResources = false
@@ -25,13 +24,26 @@ android {
     }
 }
 
-kapt { correctErrorTypes = true }
+kotlin {
+    compilerOptions {
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+    }
+}
+
+kapt {
+    correctErrorTypes = true
+    arguments {
+        arg("room.schemaLocation", "$projectDir/schemas")
+        arg("room.incremental", "true")
+    }
+}
 
 dependencies {
     implementation(project(":core:model"))
+    implementation(project(":core:network"))
 
     implementation("androidx.core:core-ktx:1.17.0")
-    implementation("androidx.room:room-runtime:2.8.4")
+    api("androidx.room:room-runtime:2.8.4")
     implementation("androidx.room:room-ktx:2.8.4")
     kapt("androidx.room:room-compiler:2.8.4")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")

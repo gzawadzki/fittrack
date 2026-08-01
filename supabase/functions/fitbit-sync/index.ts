@@ -176,6 +176,12 @@ Deno.serve(async (req: Request) => {
         status: result.status,
         importedCounts: result.importedCounts,
         retryAfter: result.retryAfterSeconds,
+        data: {
+          dailyMetrics: result.dailyMetrics,
+          cardioActivities: result.cardioActivities,
+          heartRateSamples: [],
+          exerciseHeartRateSummaries: [],
+        },
       });
     }
 
@@ -299,33 +305,22 @@ Deno.serve(async (req: Request) => {
           },
         },
         exerciseWindows: {
-          // NOTE: exact table/columns owned by M1/M5. Documented assumption
-          // in fitbit-HANDOFF.md: a `sets` (or equivalent) table exposing
-          // exercise_id + per-set start/end timestamps. Adjust this query
-          // once M5's schema lands.
           async getExerciseWindows(workoutId) {
             const { data, error } = await supabase
-              .from("sets")
-              .select("exercise_id, started_at, completed_at")
-              .eq("workout_session_id", workoutId);
+              .from("exercise_sessions")
+              .select("id, started_at, ended_at, position")
+              .eq("workout_session_id", workoutId)
+              .is("deleted_at", null)
+              .not("started_at", "is", null)
+              .not("ended_at", "is", null)
+              .order("position", { ascending: true });
             if (error) throw new Error(error.message);
-            const byExercise = new Map<string, { start: number; end: number }>();
-            for (const row of data ?? []) {
-              if (!row.started_at || !row.completed_at) continue;
-              const start = Date.parse(row.started_at);
-              const end = Date.parse(row.completed_at);
-              const existing = byExercise.get(row.exercise_id);
-              if (!existing) {
-                byExercise.set(row.exercise_id, { start, end });
-              } else {
-                existing.start = Math.min(existing.start, start);
-                existing.end = Math.max(existing.end, end);
-              }
-            }
-            return Array.from(byExercise.entries()).map(([exerciseId, w]) => ({
-              exerciseId,
-              startIso: new Date(w.start).toISOString(),
-              endIso: new Date(w.end).toISOString(),
+            return (data ?? []).map((row) => ({
+              // The aggregate key is the exercise-session UUID, not the
+              // reusable exercise/catalog UUID.
+              exerciseId: row.id,
+              startIso: row.started_at,
+              endIso: row.ended_at,
             }));
           },
         },
@@ -335,6 +330,22 @@ Deno.serve(async (req: Request) => {
         status: result.status,
         importedCounts: { heartRateSamples: result.importedSampleCount },
         retryAfter: result.retryAfterSeconds,
+        data: {
+          dailyMetrics: [],
+          cardioActivities: [],
+          heartRateSamples: result.samples.map((sample) => ({
+            workoutSessionId,
+            sampledAt: sample.ts,
+            bpm: sample.bpm,
+          })),
+          exerciseHeartRateSummaries: result.aggregates.map((aggregate) => ({
+            exerciseSessionId: aggregate.exerciseId,
+            averageBpm: aggregate.avgBpm,
+            maximumBpm: aggregate.maxBpm,
+            recoveryDeltaBpm: aggregate.recoveryDeltaBpm,
+            sampleCount: aggregate.sampleCount,
+          })),
+        },
       });
     }
 

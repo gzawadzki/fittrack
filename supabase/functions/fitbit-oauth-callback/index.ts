@@ -15,11 +15,10 @@ import {
 } from "../fitbit-shared/fitbit-api.ts";
 import { encryptToken } from "../fitbit-shared/crypto.ts";
 import { getServiceRoleClient } from "../fitbit-shared/supabase-client.ts";
-
-const APP_REDIRECT = "fittrack://auth/fitbit";
+import { FITBIT_APP_REDIRECT_URI } from "../fitbit-shared/oauth-redirect.ts";
 
 function redirect(status: "ok" | "error", reason?: string): Response {
-  const url = new URL(APP_REDIRECT);
+  const url = new URL(FITBIT_APP_REDIRECT_URI);
   url.searchParams.set("status", status);
   if (reason) url.searchParams.set("reason", reason);
   return new Response(null, {

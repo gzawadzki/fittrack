@@ -99,12 +99,18 @@ class RoomWorkoutRepositoryTest {
         val exerciseSession = workoutRepository.getExerciseSessions(session.id).first()
         val setLog = workoutRepository.getSetLogs(exerciseSession.id).first()
 
-        workoutRepository.completeSet(setLog.id, reps = 8, weightKg = 40.0, rir = 2, pain = false, techniqueIssue = false, concerningSymptom = false)
-        workoutRepository.completeSet(setLog.id, reps = 8, weightKg = 40.0, rir = 2, pain = false, techniqueIssue = false, concerningSymptom = false)
+        val firstCompletion = workoutRepository.completeSet(setLog.id, reps = 8, weightKg = 40.0, rir = 2, pain = false, techniqueIssue = false, concerningSymptom = false)
+        val identicalRetry = workoutRepository.completeSet(setLog.id, reps = 8, weightKg = 40.0, rir = 2, pain = false, techniqueIssue = false, concerningSymptom = false)
 
         val logsAfter = workoutRepository.getSetLogs(exerciseSession.id)
-        assertEquals(2, logsAfter.size) // 1 warmup + 1 working, unchanged count
+        assertEquals(3, logsAfter.size) // 1 warmup + 2 working, unchanged count
         assertTrue(logsAfter.any { it.actualReps == 8 })
+        assertEquals(firstCompletion.completedAt, identicalRetry.completedAt)
+        assertTrue(
+            runCatching {
+                workoutRepository.completeSet(setLog.id, reps = 7, weightKg = 40.0, rir = 2, pain = false, techniqueIssue = false, concerningSymptom = false)
+            }.isFailure,
+        )
     }
 
     @Test
@@ -116,5 +122,45 @@ class RoomWorkoutRepositoryTest {
         val sessions = workoutRepository.getExerciseSessions(session.id)
         assertTrue(sessions.all { it.status.name == "COMPLETED" || it.status.name == "SKIPPED" })
         assertNull(workoutRepository.getActiveWorkout())
+    }
+
+    @Test
+    fun `next exercise starts only after explicit user action`() = runTest {
+        val firstPlan = seedPlan()
+        val secondExerciseId = UUID.randomUUID().toString()
+        planRepository.upsertExercise(Exercise(secondExerciseId, "Row", "PULL", "BACK", "CABLE"))
+        planRepository.updatePlan(
+            firstPlan.copy(
+                exercises = firstPlan.exercises + PlanExercise(
+                    id = UUID.randomUUID().toString(),
+                    exerciseId = secondExerciseId,
+                    exerciseName = "Row",
+                    position = 1,
+                    warmupSets = 0,
+                    workingSets = 1,
+                    repMin = 8,
+                    repMax = 12,
+                    targetRir = 2,
+                    startingWeightKg = 30.0,
+                    restSeconds = 90,
+                    weightIncrementKg = 2.5,
+                ),
+            ),
+        )
+        val workout = workoutRepository.startWorkout(firstPlan.id)
+        val first = workoutRepository.getExerciseSessions(workout.id).first()
+        workoutRepository.getSetLogs(first.id).forEach { set ->
+            workoutRepository.completeSet(set.id, 8, set.planned.targetWeightKg, 2, false, false, false)
+        }
+
+        workoutRepository.finishExercise(first.id, "done")
+        val pending = workoutRepository.getExerciseSessions(workout.id)[1]
+        assertEquals("PENDING", pending.status.name)
+        assertNull(pending.startedAt)
+
+        workoutRepository.startExercise(pending.id)
+        val started = workoutRepository.getExerciseSessions(workout.id)[1]
+        assertEquals("ACTIVE", started.status.name)
+        assertNotNull(started.startedAt)
     }
 }

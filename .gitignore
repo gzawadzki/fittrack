@@ -9,3 +9,5 @@ local.properties
 .env.local
 supabase/.temp/
 
+.claude/
+artifacts/

@@ -244,6 +244,32 @@ Deno.serve(async (req: Request) => {
           );
         }
       }
+
+      // The database also has a partial unique index. This preflight turns
+      // its expected cross-device collision into the normal conflict/pull
+      // protocol instead of an opaque 500. Excluding this entity allows an
+      // UPDATE of the already-active row itself.
+      if (
+        op.entityType === "workout_sessions" &&
+        op.op !== "DELETE" &&
+        op.data.status === "ACTIVE"
+      ) {
+        const { data: otherActive, error: activeError } = await admin
+          .from("workout_sessions")
+          .select("id")
+          .eq("user_id", userId)
+          .eq("status", "ACTIVE")
+          .is("deleted_at", null)
+          .neq("id", op.entityId)
+          .limit(1)
+          .maybeSingle();
+        if (activeError) throw activeError;
+        if (otherActive) {
+          return versionConflict(
+            `operation ${op.operationId}: another ACTIVE workout must be pulled and reconciled first`,
+          );
+        }
+      }
     }
 
     // Phase 2: apply.
@@ -267,7 +293,14 @@ Deno.serve(async (req: Request) => {
           .upsert(row, { onConflict: "id", ignoreDuplicates: false })
           .select("version")
           .single();
-        if (error) throw error;
+        if (error) {
+          if (op.entityType === "workout_sessions" && error.code === "23505") {
+            return versionConflict(
+              `operation ${op.operationId}: another ACTIVE workout was created concurrently`,
+            );
+          }
+          throw error;
+        }
         resultVersion = upserted.version as number;
       } else if (op.op === "UPDATE") {
         const { data: updated, error } = await admin
@@ -278,7 +311,14 @@ Deno.serve(async (req: Request) => {
           .eq("version", op.baseVersion)
           .select("version")
           .maybeSingle();
-        if (error) throw error;
+        if (error) {
+          if (op.entityType === "workout_sessions" && error.code === "23505") {
+            return versionConflict(
+              `operation ${op.operationId}: another ACTIVE workout was activated concurrently`,
+            );
+          }
+          throw error;
+        }
         if (!updated) {
           return versionConflict(
             `operation ${op.operationId}: ${op.entityType} ${op.entityId} changed concurrently; pull latest changes and retry`,

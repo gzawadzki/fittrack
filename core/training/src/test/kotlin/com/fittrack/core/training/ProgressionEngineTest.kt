@@ -60,7 +60,7 @@ class ProgressionEngineTest {
 
     @Test fun `decrease never goes below zero`() {
         val result = ProgressionEngine.recommend(
-            ProgressionInput(1.0, 2.5, 8, 10, 2, listOf(SetPerformance(5, 1)), missed = 1)
+            ProgressionInput(1.0, 2.5, 8, 10, 2, listOf(SetPerformance(5, 1)), consecutiveMissedSessions = 1)
         )
         assertEquals(ProgressionAction.DECREASE_LOAD, result.action)
         assertEquals(0.0, result.proposedWeightKg, 0.0)

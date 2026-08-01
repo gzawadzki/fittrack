@@ -81,6 +81,7 @@ class CoachEngineTest {
         override suspend fun getExerciseSessionHistory(planExerciseId: String, excludeWorkoutId: String?, limit: Int) =
             history.map { it.first }.take(limit)
         override suspend fun startWorkout(planId: String) = throw UnsupportedOperationException()
+        override suspend fun startExercise(exerciseSessionId: String) = Unit
         override suspend fun completeSet(setId: String, reps: Int, weightKg: Double, rir: Int?, pain: Boolean, techniqueIssue: Boolean, concerningSymptom: Boolean) = throw UnsupportedOperationException()
         override suspend fun finishExercise(exerciseSessionId: String, note: String) = Unit
         override suspend fun skipExercise(exerciseSessionId: String, reason: String) = Unit

@@ -9,6 +9,9 @@ Owner: Agent 6. Exclusive paths: `supabase/functions/fitbit-*`,
   - `fitbit-oauth-start` (`supabase/functions/fitbit-oauth-start/index.ts`) — mints a
     CSRF `state` + PKCE `code_verifier`/`code_challenge`, persists them in
     `fitbit_oauth_states` (10 min TTL, single-use), returns `authorizeUrl`.
+    Fitbit receives the HTTPS Edge Function callback derived from
+    `SUPABASE_URL`; `fittrack://auth/fitbit` is separately allowlisted and is
+    used only for the final redirect back into the app.
   - `fitbit-oauth-callback` (`supabase/functions/fitbit-oauth-callback/index.ts`) —
     exchanges `code` for tokens, encrypts access+refresh tokens (AES-256-GCM,
     fresh IV per encryption) and upserts `fitbit_tokens`, then 302-redirects to
@@ -73,25 +76,14 @@ to be distinct from M5's `0001_*`/`0002_*`/`0003_*` sequential prefixes seen
 in its worktree at the time this was written — confirm no collision once
 branches are merged.
 
-## Known limitation / integration point to confirm with M5
+## M5 integration
 
 `fitbit-sync`'s `WORKOUT_HR` mode reads:
 - `workout_sessions(id, user_id, started_at, ended_at)` to get the workout
   window, and
-- a `sets(exercise_id, workout_session_id, started_at, completed_at)` shaped
-  table to derive each exercise's time range (min/max across its sets).
-
-Neither table exists yet in this module's own migration (by design — they're
-owned by M1/M5) and their exact column names were **not** in the frozen
-Kotlin contract in section 4, only inferred from the domain model. **Once
-M5's workout/exercise/set schema lands, verify these two queries in
-`fitbit-sync/index.ts` (search for "NOTE: workout_sessions is owned by M5's
-schema" and "NOTE: exact table/columns owned by M1/M5") against the real
-column names and adjust if they differ.** The rest of the pipeline
-(`fitbit-shared/workout-hr-sync.ts`) is schema-agnostic — it takes
-`WorkoutInfo` and `ExerciseTimeRange[]` as plain data, so only the two
-Supabase queries in `fitbit-sync/index.ts` need updating, not the pipeline
-logic itself.
+- `exercise_sessions(id, workout_session_id, started_at, ended_at)` for exact
+  per-exercise windows. The `exercise_sessions.id` UUID is the aggregate key;
+  the reusable exercise/catalog UUID is not used for HR matching.
 
 ## How to test
 
@@ -105,7 +97,7 @@ cd supabase/functions
 node --experimental-strip-types --test fitbit-tests/*.test.ts
 ```
 
-22/22 tests pass, covering:
+25/25 tests pass, covering:
 - `fitbit-tests/hr-window.test.ts` — window padding/clamping to ≤1 day,
   midnight-crossing day-split, HR-to-exercise matching with the
   never-false-zero rule.
@@ -123,7 +115,10 @@ node --experimental-strip-types --test fitbit-tests/*.test.ts
   auto-refresh-and-retry path and 429 handling end-to-end through
   `syncWorkoutHr`.
 - `fitbit-tests/daily-sync.test.ts` — missing sleep/RHR stored as `null` not
-  `0`, walk/run filtering from the full activities list, 429 → `PARTIAL`.
+  `0`, normalized response DTOs without raw Fitbit JSON, walk/run filtering
+  from the full activities list, 429 → `PARTIAL`.
+- `fitbit-tests/oauth-redirect.test.ts` — HTTPS backend callback derivation
+  and exact app deep-link allowlisting.
 
 This works because all business logic (`fitbit-shared/hr-window.ts`,
 `retry.ts`, `crypto.ts`, `workout-hr-sync.ts`, `daily-sync.ts`) is written
@@ -146,8 +141,9 @@ available:
 1. `supabase secrets set FITBIT_CLIENT_ID=... FITBIT_CLIENT_SECRET=... FITBIT_TOKEN_ENC_KEY=$(node -e "console.log(require('crypto').randomBytes(32).toString('base64'))")`
 2. `supabase db push` (applies `20260801060000_fitbit_schema.sql`).
 3. `supabase functions serve fitbit-oauth-start fitbit-oauth-callback fitbit-sync`.
-4. Call `fitbit-oauth-start` with a valid Supabase JWT and a `redirectUri`
-   registered on the Fitbit app; open the returned `authorizeUrl` in a
+4. Register `<SUPABASE_URL>/functions/v1/fitbit-oauth-callback` in Fitbit,
+   then call `fitbit-oauth-start` with a valid Supabase JWT and
+   `{"redirectUri":"fittrack://auth/fitbit"}`; open the returned `authorizeUrl` in a
    browser, approve, confirm the browser lands on
    `fittrack://auth/fitbit?status=ok`.
 5. Call `fitbit-sync` with `{"mode":"DAILY_METRICS"}` and inspect
@@ -162,7 +158,7 @@ available:
 **`POST /fitbit-oauth-start`** (requires `Authorization: Bearer <supabase JWT>`)
 ```json
 // request
-{ "redirectUri": "fittrack://auth/fitbit-redirect" }
+{ "redirectUri": "fittrack://auth/fitbit" }
 // response 200
 { "authorizeUrl": "https://www.fitbit.com/oauth2/authorize?..." }
 ```
@@ -178,15 +174,15 @@ available:
 // request
 { "mode": "DAILY_METRICS" }
 // response 200
-{ "status": "SYNCED", "importedCounts": { "sleep": 1, "restingHeartRate": 1, "steps": 1, "activities": 2 }, "retryAfter": null }
+{ "status": "SYNCED", "importedCounts": { "sleep": 1, "restingHeartRate": 1, "steps": 1, "activities": 2 }, "retryAfter": null, "data": { "dailyMetrics": [], "cardioActivities": [], "heartRateSamples": [], "exerciseHeartRateSummaries": [] } }
 ```
 ```json
 // request
 { "mode": "WORKOUT_HR", "workoutSessionId": "9c9b1e2e-1111-4a11-8a11-000000000001" }
 // response 200 (Fitbit not synced yet)
-{ "status": "PENDING", "importedCounts": { "heartRateSamples": 0 }, "retryAfter": 42 }
+{ "status": "PENDING", "importedCounts": { "heartRateSamples": 0 }, "retryAfter": 42, "data": { "dailyMetrics": [], "cardioActivities": [], "heartRateSamples": [], "exerciseHeartRateSummaries": [] } }
 // response 200 (synced)
-{ "status": "SYNCED", "importedCounts": { "heartRateSamples": 2312 }, "retryAfter": null }
+{ "status": "SYNCED", "importedCounts": { "heartRateSamples": 2312 }, "retryAfter": null, "data": { "dailyMetrics": [], "cardioActivities": [], "heartRateSamples": [{ "workoutSessionId": "...", "sampledAt": "2026-08-01T10:02:00.000Z", "bpm": 135 }], "exerciseHeartRateSummaries": [{ "exerciseSessionId": "...", "averageBpm": 132.5, "maximumBpm": 150, "recoveryDeltaBpm": 25, "sampleCount": 3 }] } }
 ```
 ```json
 // request
@@ -218,33 +214,25 @@ console) to this function's deployed `fitbit-oauth-callback` URL.
 
 ## Known limitations
 
-1. **Exercise/set schema assumption** — see "Integration point to confirm
-   with M5" above; the two queries in `fitbit-sync/index.ts` (`WORKOUT_HR`
-   mode) assume table/column names not present in any migration this module
-   owns.
-2. **Timezone handling** — `computeHrWindow`/`splitWindowByDay` operate in
+1. **Timezone handling** — `computeHrWindow`/`splitWindowByDay` operate in
    UTC. Fitbit's intraday endpoint is scoped to the user's Fitbit-account
    timezone, not UTC. For most single-timezone users this is invisible, but
    a workout that starts very close to local midnight in a non-UTC timezone
    could compute a UTC day-split that doesn't line up with Fitbit's actual
    day boundary. Not exercised by fixtures; flagged for follow-up if
    multi-timezone correctness becomes a requirement.
-3. **`fitbit_sync_cursors` table exists but isn't used yet** — `DAILY_METRICS`
+2. **`fitbit_sync_cursors` table exists but isn't used yet** — `DAILY_METRICS`
    mode currently always re-pulls the last 7 days rather than resuming from a
    cursor. Cheap to fix later (the table is already migrated) but not wired
    up, since 7-day re-pull is idempotent (`upsert` on `(user_id, metric_date)`
    / `(user_id, fitbit_log_id)`) and cheap enough for a personal-use app.
-4. **Retention cleanup isn't scheduled** — `RETENTION_CLEANUP` mode and the
+3. **Retention cleanup isn't scheduled** — `RETENTION_CLEANUP` mode and the
    underlying `fitbit_purge_expired_hr_samples()` SQL function exist and are
    invokable, but nothing in this module wires up a cron/schedule to call it
    automatically. Needs a `pg_cron` job or an external scheduler hitting
    `fitbit-sync` with `{"mode":"RETENTION_CLEANUP"}` periodically — left to
    M8/ops since scheduling infrastructure is outside this module's owned
    paths.
-5. **No live-API verification** — see "How to test" above; everything was
+4. **No live-API verification** — see "How to test" above; everything was
    validated against fixtures/fakes, not the real Fitbit API or a live
    Supabase instance, since neither was available in this environment.
-6. **`fitbit-oauth-start`'s `redirectUri` is not allowlisted** — it's echoed
-   into the Fitbit authorize URL as provided by the caller. For a "Personal"
-   app with a single allowed user this is low-risk, but if multi-tenant use
-   is ever considered, add an allowlist check before the OAuth redirect.

@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <data-extraction-rules>
-    <cloud-backup><exclude domain="sharedpref" path="fittrack_secure.xml" /></cloud-backup>
-    <device-transfer><exclude domain="sharedpref" path="fittrack_secure.xml" /></device-transfer>
+    <cloud-backup><exclude domain="sharedpref" path="fittrack.secure.session.xml" /></cloud-backup>
+    <device-transfer><exclude domain="sharedpref" path="fittrack.secure.session.xml" /></device-transfer>
 </data-extraction-rules>

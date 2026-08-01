@@ -174,3 +174,48 @@ data class HealthDay(
     val steps: Int?,
     val source: String,
 )
+
+/** A normalized walk/run activity imported from Fitbit. [id] is replaced by
+ * the database repository with a deterministic UUID derived from [sourceId],
+ * so replaying the same remote activity cannot create a duplicate. */
+data class CardioActivity(
+    val id: String,
+    val sourceId: String,
+    val kind: String,
+    val startedAt: Instant,
+    val endedAt: Instant,
+    val durationSeconds: Int,
+    val distanceMeters: Double?,
+    val steps: Int?,
+    val averageHeartRate: Int?,
+)
+
+data class HeartRateSample(
+    val workoutSessionId: String,
+    val sampledAt: Instant,
+    val bpm: Int,
+)
+
+/** Nullable averages/maxima are accepted at the import boundary because
+ * Fitbit can return a valid no-data aggregate. Repositories expose only
+ * summaries where [hasData] is true. */
+data class ExerciseHeartRateSummary(
+    val exerciseSessionId: String,
+    val averageBpm: Int?,
+    val maximumBpm: Int?,
+    val recoveryDeltaBpm: Int?,
+    val sampleCount: Int,
+) {
+    val hasData: Boolean
+        get() = sampleCount > 0 && averageBpm != null && maximumBpm != null
+}
+
+data class FitbitDataPayload(
+    val workoutSessionId: String? = null,
+    val workoutSyncStatus: FitbitSyncStatus? = null,
+    val dailyHealth: List<HealthDay> = emptyList(),
+    val cardioActivities: List<CardioActivity> = emptyList(),
+    val heartRateSamples: List<HeartRateSample> = emptyList(),
+    val exerciseHeartRateSummaries: List<ExerciseHeartRateSummary> = emptyList(),
+    val syncedAt: Instant,
+)

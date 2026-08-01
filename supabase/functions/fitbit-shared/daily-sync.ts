@@ -68,6 +68,27 @@ export interface DailySyncResult {
   status: "SYNCED" | "PARTIAL" | "FAILED";
   importedCounts: ImportedCounts;
   retryAfterSeconds: number | null;
+  dailyMetrics: NormalizedDailyMetric[];
+  cardioActivities: NormalizedCardioActivity[];
+}
+
+export interface NormalizedDailyMetric {
+  date: string;
+  sleepMinutes: number | null;
+  restingHeartRate: number | null;
+  steps: number | null;
+  source: "FITBIT";
+}
+
+export interface NormalizedCardioActivity {
+  sourceId: string;
+  kind: string;
+  startedAt: string;
+  endedAt: string | null;
+  durationSeconds: number | null;
+  distanceMeters: number | null;
+  steps: number | null;
+  averageHeartRate: number | null;
 }
 
 const WALK_RUN_ACTIVITY_NAMES = new Set([
@@ -96,6 +117,8 @@ export async function syncDailyMetrics(opts: {
     steps: 0,
     activities: 0,
   };
+  const dailyMetrics: NormalizedDailyMetric[] = [];
+  const cardioActivities: NormalizedCardioActivity[] = [];
 
   let accessToken = await opts.tokens.getAccessToken();
   let sawFailure = false;
@@ -169,6 +192,13 @@ export async function syncDailyMetrics(opts: {
         steps,
         raw: { sleep: sleepBody, rhr: rhrBody, steps: stepsBody },
       });
+      dailyMetrics.push({
+        date,
+        sleepMinutes,
+        restingHeartRate,
+        steps,
+        source: "FITBIT",
+      });
       if (sleepMinutes !== null) counts.sleep += 1;
       if (restingHeartRate !== null) counts.restingHeartRate += 1;
       if (steps !== null) counts.steps += 1;
@@ -186,24 +216,33 @@ export async function syncDailyMetrics(opts: {
     const walkRun = list.filter((a) =>
       WALK_RUN_ACTIVITY_NAMES.has(String(a.activityName ?? "").toLowerCase())
     );
+    const activityRows = walkRun.map((a) => ({
+      userId: opts.userId,
+      fitbitLogId: String(a.logId),
+      activityType: String(a.activityName ?? "unknown"),
+      startedAtIso: a.startTime,
+      endedAtIso: a.startTime && a.duration
+        ? new Date(Date.parse(a.startTime) + a.duration).toISOString()
+        : null,
+      durationMs: a.duration ?? null,
+      distanceKm: a.distance ?? null,
+      calories: a.calories ?? null,
+      steps: a.steps ?? null,
+      raw: a,
+    }));
     if (walkRun.length > 0) {
-      await opts.activityStore.upsertMany(
-        walkRun.map((a) => ({
-          userId: opts.userId,
-          fitbitLogId: String(a.logId),
-          activityType: String(a.activityName ?? "unknown"),
-          startedAtIso: a.startTime,
-          endedAtIso: a.startTime && a.duration
-            ? new Date(Date.parse(a.startTime) + a.duration).toISOString()
-            : null,
-          durationMs: a.duration ?? null,
-          distanceKm: a.distance ?? null,
-          calories: a.calories ?? null,
-          steps: a.steps ?? null,
-          raw: a,
-        })),
-      );
+      await opts.activityStore.upsertMany(activityRows);
     }
+    cardioActivities.push(...activityRows.map((row) => ({
+      sourceId: row.fitbitLogId,
+      kind: row.activityType,
+      startedAt: row.startedAtIso,
+      endedAt: row.endedAtIso,
+      durationSeconds: row.durationMs === null ? null : Math.round(row.durationMs / 1000),
+      distanceMeters: row.distanceKm === null ? null : row.distanceKm * 1000,
+      steps: row.steps,
+      averageHeartRate: null,
+    })));
     counts.activities = walkRun.length;
   }
 
@@ -213,7 +252,13 @@ export async function syncDailyMetrics(opts: {
     ? "PARTIAL"
     : "SYNCED";
 
-  return { status, importedCounts: counts, retryAfterSeconds };
+  return {
+    status,
+    importedCounts: counts,
+    retryAfterSeconds,
+    dailyMetrics,
+    cardioActivities,
+  };
 }
 
 function maxRetry(a: number | null, b: number | null): number | null {
