@@ -1,238 +1,206 @@
-# Fitbit backend + HR pipeline (M6) — handoff
+# Fitbit -> Health Connect pipeline (M6) — handoff
 
-Owner: Agent 6. Exclusive paths: `supabase/functions/fitbit-*`,
-`supabase/migrations/20260801060000_fitbit_schema.sql`, Fitbit test fixtures.
+Owner: Agent 6 / M6-healthconnect. Exclusive paths: `supabase/functions/fitbit-*`,
+`supabase/migrations/20260801060000_fitbit_schema.sql`, Fitbit test fixtures,
+plus the Health Connect integration points named in the task brief:
+`core/network/HealthConnectGateway.kt`, `HealthConnectSyncGateway.kt`,
+`HrExerciseMatcher.kt`, `supabase/functions/_shared/entities.ts` (whitelist
+additions), `core/network/build.gradle.kts`, `docs/adr/0001-*.md`.
 
-## What works
+**Read `docs/adr/0001-fitbit-health-connect-pivot.md` first.** It has the
+full rationale for every deletion/keep/kept-unused decision below; this file
+is the "what works, how to test, what's left" companion.
 
-- **OAuth Authorization Code + PKCE flow**, server-side only:
-  - `fitbit-oauth-start` (`supabase/functions/fitbit-oauth-start/index.ts`) — mints a
-    CSRF `state` + PKCE `code_verifier`/`code_challenge`, persists them in
-    `fitbit_oauth_states` (10 min TTL, single-use), returns `authorizeUrl`.
-    Fitbit receives the HTTPS Edge Function callback derived from
-    `SUPABASE_URL`; `fittrack://auth/fitbit` is separately allowlisted and is
-    used only for the final redirect back into the app.
-  - `fitbit-oauth-callback` (`supabase/functions/fitbit-oauth-callback/index.ts`) —
-    exchanges `code` for tokens, encrypts access+refresh tokens (AES-256-GCM,
-    fresh IV per encryption) and upserts `fitbit_tokens`, then 302-redirects to
-    `fittrack://auth/fitbit?status=ok|error&reason=...`. The client secret and
-    the tokens never appear in the redirect, the response body, or any log line.
-  - State row is deleted immediately after being read (before the token
-    exchange), so a replayed `code`/`state` cannot succeed twice.
-- **`fitbit-sync`** (`supabase/functions/fitbit-sync/index.ts`), three modes:
-  - `DAILY_METRICS` — imports sleep, resting heart rate, steps (last 7 days)
-    and recent walk/run activities (filtered from the full activities list by
-    activity name). Missing values are written as SQL `NULL`, never `0`.
-  - `WORKOUT_HR` — given `workoutSessionId`, computes
-    `[startedAt-5min, endedAt+5min]` clamped to ≤24h, fetches Fitbit's 1s
-    intraday HR (split per calendar day if the window crosses midnight),
-    matches samples into each exercise's time range, computes
-    avg/max/recovery-delta per exercise, and flips
-    `fitbit_workout_hr_sync.status` `PENDING -> SYNCED` (or `FAILED`).
-  - `RETENTION_CLEANUP` — calls the `fitbit_purge_expired_hr_samples()` SQL
-    function to delete raw HR samples older than 90 days. Aggregates in
-    `fitbit_hr_exercise_aggregates` are never touched by this.
-- **Retry/error handling** (`fitbit-shared/retry.ts`):
-  - `401` → refresh access token once via the stored (encrypted) refresh
-    token, retry the call; a second `401` fails the sync (`fitbit_reauth_required`).
-  - `429` → `PENDING`/`PARTIAL` with `retryAfter` sourced from Fitbit's
-    `Retry-After` header (falls back to 60s if absent/invalid).
-  - Empty intraday dataset within 20 minutes of the workout window's end is
-    treated as "Fitbit hasn't ingested the device data yet", not as "no HR
-    recorded" — this defers to `PENDING` with exponential backoff (30s →
-    ..., capped at 30 min). Past that grace period, an empty result is
-    accepted as final (e.g. the device wasn't worn).
-- **Never-false-zero guarantee**: an exercise with zero overlapping HR
-  samples gets `avgBpm/maxBpm/recoveryDeltaBpm = null` and `sampleCount = 0`
-  in `fitbit_hr_exercise_aggregates` — verified by test.
-- **Token encryption**: `fitbit-shared/crypto.ts` does AES-256-GCM via Web
-  Crypto (works identically in Deno and Node). Plaintext tokens exist only
-  in-memory inside the edge function for the duration of a request/response
-  cycle; Postgres only ever stores ciphertext + IV.
+## What changed (2026-08-01)
 
-## Migration
+Fitbit deprecated the client-secret-based OAuth registration path this
+module originally used. The project owner registered a new Health Connect
+Android OAuth client instead (public client id, not a secret — safe to
+reference in code). Health data now comes from **Android Health Connect**,
+read on-device, not from a server-side Fitbit API pull. This handoff
+replaces the old OAuth/token/HR-pull description with the new architecture.
 
-`supabase/migrations/20260801060000_fitbit_schema.sql` — additive only,
-never alters another module's tables. Creates:
+### Deleted (see the ADR for why each has zero remaining callers)
 
-| Table | Purpose |
-|---|---|
-| `fitbit_tokens` | one row/user, encrypted access+refresh token |
-| `fitbit_oauth_states` | short-lived PKCE/CSRF state, service-role only (no RLS policy = default deny for anon/authenticated) |
-| `fitbit_sync_cursors` | per-resource incremental sync bookkeeping (present for future use; `fitbit-sync` currently just re-pulls the last 7 days each call) |
-| `fitbit_daily_metrics` | sleep/RHR/steps per user/date, `NULL` for missing values |
-| `fitbit_activities` | imported walk/run activities, deduped by `fitbit_log_id` |
-| `fitbit_workout_hr_sync` | one row per workout, backs the `fitbitSyncStatus` domain field (`PENDING`/`SYNCED`/`FAILED`) |
-| `fitbit_hr_samples` | raw 1s HR samples, purged after 90 days |
-| `fitbit_hr_exercise_aggregates` | per-exercise avg/max/recovery-delta, kept forever |
+- `supabase/functions/fitbit-oauth-start/`, `fitbit-oauth-callback/` (whole directories)
+- `supabase/functions/fitbit-shared/{oauth-redirect,pkce,token-provider,fitbit-api,crypto,daily-sync,retry,workout-hr-sync}.ts`
+- `supabase/functions/fitbit-tests/{crypto,daily-sync,oauth-redirect,retry,workout-hr-sync}.test.ts` and `fitbit-tests/fixtures/`
 
-RLS: `auth.uid() = user_id` on every user-owned table, same convention as M5.
-`workout_session_id` / `exercise_id` columns are plain `uuid` with **no FK
-constraint** to M5/M1's tables, since this module must migrate cleanly against
-an empty database independent of migration ordering.
+### Kept
 
-**Naming coordination**: filename prefix `20260801060000_fitbit_*` was chosen
-to be distinct from M5's `0001_*`/`0002_*`/`0003_*` sequential prefixes seen
-in its worktree at the time this was written — confirm no collision once
-branches are merged.
+- `supabase/functions/fitbit-shared/{errors.ts,supabase-client.ts,hr-window.ts}` —
+  generic helpers + the still-tested (now server-side-unused, kept as
+  reference) window/matching math.
+- `supabase/functions/fitbit-sync/index.ts` — trimmed to **`RETENTION_CLEANUP`
+  only**. `DAILY_METRICS`/`WORKOUT_HR` modes and their Fitbit-API calls are gone.
+- `supabase/migrations/20260801060000_fitbit_schema.sql` — **untouched, no
+  new migration**. `fitbit_daily_metrics` and `fitbit_hr_exercise_aggregates`
+  already have the right shape for Health-Connect-sourced rows.
+  `fitbit_tokens`, `fitbit_oauth_states`, `fitbit_hr_samples`,
+  `fitbit_workout_hr_sync` are left in place but unused — see the ADR's
+  "fate of" section for the tradeoff.
 
-## M5 integration
+### Added
 
-`fitbit-sync`'s `WORKOUT_HR` mode reads:
-- `workout_sessions(id, user_id, started_at, ended_at)` to get the workout
-  window, and
-- `exercise_sessions(id, workout_session_id, started_at, ended_at)` for exact
-  per-exercise windows. The `exercise_sessions.id` UUID is the aggregate key;
-  the reusable exercise/catalog UUID is not used for HR matching.
+- **`core/network/src/main/java/com/fittrack/core/network/HealthConnectGateway.kt`** —
+  `HealthConnectGateway` interface + `AndroidHealthConnectGateway` impl.
+  Requests read permissions for `StepsRecord`, `SleepSessionRecord`,
+  `RestingHeartRateRecord`, `ExerciseSessionRecord`, `HeartRateRecord`. Reads
+  daily aggregates (`readDailyMetrics`) and a workout's HR window
+  (`readWorkoutHeartRate`, using the same `[startedAt-5min, endedAt+5min]`
+  padding rule as the old Fitbit pipeline, clamped to <=24h).
+- **`core/network/src/main/java/com/fittrack/core/network/HrExerciseMatcher.kt`** —
+  pure Kotlin port of `fitbit-shared/hr-window.ts`'s `computeHrWindow` +
+  `matchAndAggregate` (average/max/recovery-delta per exercise, never-false-
+  zero rule). No Fitbit-specific day-splitting — not needed, Health Connect
+  accepts arbitrary time ranges.
+- **`core/network/src/main/java/com/fittrack/core/network/HealthConnectSyncGateway.kt`** —
+  maps Health Connect reads onto the existing frozen domain types
+  (`HealthDay`, `FitbitDataPayload`, `ExerciseHeartRateSummary` in
+  `core/model/DomainTypes.kt` — **unchanged**, they already fit) for local
+  persistence via the existing `HealthRepository`/`FitbitDataRepository`
+  interfaces, and separately pushes daily metrics + HR aggregates to
+  Supabase via the existing `/sync-batch` contract (`SyncClient`), targeting
+  the two new whitelist entries below. See the class doc comment for the
+  documented limitation: this pushes directly rather than through
+  core/database's local Room outbox (durable-offline-retry), because wiring
+  a fully durable path needs new Room entities/DAO methods in
+  `core/database/entity/Entities.kt`/`FitTrackDao.kt` — large, monolithic
+  files actively owned by M1 in a separate worktree, out of this module's
+  named scope. Flagged as a concrete follow-up, not silently skipped.
+- **`supabase/functions/_shared/entities.ts`** — two new writable entity
+  types: `fitbit_daily_metrics` (`metric_date`, `sleep_minutes`,
+  `resting_heart_rate`, `steps`, `raw`) and `fitbit_hr_exercise_aggregates`
+  (`workout_session_id`, `exercise_id`, `avg_bpm`, `max_bpm`,
+  `recovery_delta_bpm`, `sample_count`) — column sets match the existing
+  migration exactly.
+- **`core/network/build.gradle.kts`** — pinned
+  `androidx.health.connect:connect-client:1.1.0-alpha12` (no `+` range; this
+  repo has no Gradle version catalog, every module pins literal version
+  strings directly, so this follows the existing convention). **Could not be
+  confirmed against Google Maven** — no network access in this sandbox —
+  verify it resolves before a real build and bump if a newer stable exists.
+- **`docs/adr/0001-fitbit-health-connect-pivot.md`** — full decision record.
+
+## What a developer (UI/feature-module owner) still needs to build
+
+This module does not own or touch `feature/settings/`, `feature/workout/`,
+or app-level DI (`app/`), per IMPLEMENTATION_PLAN.md's module ownership. To
+finish wiring:
+
+1. **Permission-request UI** (feature/settings, matching where the old
+   "connect Fitbit" button lived): call
+   `HealthConnectGateway.requiredPermissions()` and launch it via
+   `PermissionController.createRequestPermissionResultContract()` (standard
+   Health Connect Compose/Activity Result API — not built here). Show
+   connected/not-connected state from `hasAllPermissions()`, same neutral-
+   when-absent treatment the old Fitbit "not connected" state had (plan
+   section 3, M3: "brak danych Fitbit jest pokazany jako neutralny").
+2. **DI wiring** (app/, M0's path): construct `AndroidHealthConnectGateway`
+   with an Android `Context`, wrap it in `HealthConnectSyncGateway` with the
+   app's existing `SyncClient` instance (the same one `SupabaseSyncClient`
+   already provides).
+3. **Trigger points** (feature/workout or platform/reminders, wherever the
+   old post-workout Fitbit sync call lived): after `finishWorkout`, call
+   `readWorkoutHeartRate(...)`, persist locally via
+   `FitbitDataRepository.persist(result.toFitbitDataPayload(...))`, then push
+   via `HealthConnectSyncGateway.pushWorkoutAggregates(...)`. On a periodic
+   or app-open cadence, call `readDailyMetrics()` ->
+   `HealthRepository.upsertDailyHealth(result.toHealthDays())` ->
+   `HealthConnectSyncGateway.pushDailyMetrics(...)`.
+4. **Business rule reminder** (plan section 5): steps are context only,
+   never a standalone reason to auto-change a plan/suggestion. Nothing added
+   in this module touches `PlanRepository`/suggestion state — whatever code
+   a UI owner adds around this data must keep that true.
 
 ## How to test
 
-No Supabase CLI, Docker, or live Fitbit account was available in this
-environment, so verification is split:
-
-**Ran and passing (Node 24, no Deno needed for pure logic):**
+**Ran and passing (Node 24):**
 
 ```bash
 cd supabase/functions
 node --experimental-strip-types --test fitbit-tests/*.test.ts
 ```
 
-25/25 tests pass, covering:
-- `fitbit-tests/hr-window.test.ts` — window padding/clamping to ≤1 day,
-  midnight-crossing day-split, HR-to-exercise matching with the
-  never-false-zero rule.
-- `fitbit-tests/retry.test.ts` — 401/429/5xx classification, Retry-After
-  parsing, the "empty result within grace period" defer decision.
-- `fitbit-tests/crypto.test.ts` — encrypt/decrypt round-trip, wrong-key
-  failure, fresh IV per call (no nonce reuse).
-- `fitbit-tests/workout-hr-sync.test.ts` — **the definition-of-done fixture**:
-  `fitbit-tests/fixtures/workout-delayed-sync.json` simulates a workout whose
-  HR data isn't in Fitbit yet; attempt 1 (called 2 min after the workout ends)
-  returns `PENDING` with a `retryAfter` and writes no aggregates; attempt 2
-  (called later, with the fixture now returning the full dataset) returns
-  `SYNCED`, persists aggregates, and an exercise with zero overlapping
-  samples still gets `null` fields rather than `0`. Also covers the 401
-  auto-refresh-and-retry path and 429 handling end-to-end through
-  `syncWorkoutHr`.
-- `fitbit-tests/daily-sync.test.ts` — missing sleep/RHR stored as `null` not
-  `0`, normalized response DTOs without raw Fitbit JSON, walk/run filtering
-  from the full activities list, 429 → `PARTIAL`.
-- `fitbit-tests/oauth-redirect.test.ts` — HTTPS backend callback derivation
-  and exact app deep-link allowlisting.
+9/9 tests pass:
+- `fitbit-tests/hr-window.test.ts` (unchanged, kept as reference — 6 tests:
+  window padding/clamping, midnight-crossing day-split, never-false-zero
+  matching).
+- `fitbit-tests/entities-whitelist.test.ts` (new — 3 tests: the two new
+  entity types are writable with exactly the migrated columns, and the
+  retired token/state/raw-sample tables are correctly NOT writable).
 
-This works because all business logic (`fitbit-shared/hr-window.ts`,
-`retry.ts`, `crypto.ts`, `workout-hr-sync.ts`, `daily-sync.ts`) is written
-with zero Deno-specific APIs and takes its Fitbit HTTP client / DB access as
-injected interfaces — the same shape is wired to real `fetch` +
-`@supabase/supabase-js` in the three `index.ts` handlers, but that wiring
-itself was **not** executed (no Deno/Supabase CLI here).
-
-**Not run — requires the real environment:**
-- `supabase functions serve` / `supabase db reset` to apply the migration
-  and boot the three edge functions.
-- An actual Fitbit "Personal" app registration and OAuth round-trip against
-  `https://api.fitbit.com`.
-- The `fitbit-oauth-start`/`callback`/`sync` `index.ts` files themselves
-  (they import `Deno.serve` and `https://esm.sh/@supabase/supabase-js@2`,
-  which only resolve under the Deno edge runtime).
-
-To verify against the real API once Supabase CLI + a Fitbit dev app are
-available:
-1. `supabase secrets set FITBIT_CLIENT_ID=... FITBIT_CLIENT_SECRET=... FITBIT_TOKEN_ENC_KEY=$(node -e "console.log(require('crypto').randomBytes(32).toString('base64'))")`
-2. `supabase db push` (applies `20260801060000_fitbit_schema.sql`).
-3. `supabase functions serve fitbit-oauth-start fitbit-oauth-callback fitbit-sync`.
-4. Register `<SUPABASE_URL>/functions/v1/fitbit-oauth-callback` in Fitbit,
-   then call `fitbit-oauth-start` with a valid Supabase JWT and
-   `{"redirectUri":"fittrack://auth/fitbit"}`; open the returned `authorizeUrl` in a
-   browser, approve, confirm the browser lands on
-   `fittrack://auth/fitbit?status=ok`.
-5. Call `fitbit-sync` with `{"mode":"DAILY_METRICS"}` and inspect
-   `fitbit_daily_metrics`/`fitbit_activities`.
-6. Create a `workout_sessions` row with real `started_at`/`ended_at`, call
-   `fitbit-sync` with `{"mode":"WORKOUT_HR","workoutSessionId":"..."}` shortly
-   after — expect `PENDING`; call again a few minutes later — expect
-   `SYNCED` and populated `fitbit_hr_exercise_aggregates`.
-
-## Exact request/response contracts (as implemented, matching section 4)
-
-**`POST /fitbit-oauth-start`** (requires `Authorization: Bearer <supabase JWT>`)
-```json
-// request
-{ "redirectUri": "fittrack://auth/fitbit" }
-// response 200
-{ "authorizeUrl": "https://www.fitbit.com/oauth2/authorize?..." }
-```
-
-**`GET /fitbit-oauth-callback?code=...&state=...`** (no JWT; Fitbit calls this directly)
-```
-302 Location: fittrack://auth/fitbit?status=ok
-302 Location: fittrack://auth/fitbit?status=error&reason=<denied|missing_params|invalid_state|state_expired|internal>
-```
-
-**`POST /fitbit-sync`** (requires JWT)
-```json
-// request
-{ "mode": "DAILY_METRICS" }
-// response 200
-{ "status": "SYNCED", "importedCounts": { "sleep": 1, "restingHeartRate": 1, "steps": 1, "activities": 2 }, "retryAfter": null, "data": { "dailyMetrics": [], "cardioActivities": [], "heartRateSamples": [], "exerciseHeartRateSummaries": [] } }
-```
-```json
-// request
-{ "mode": "WORKOUT_HR", "workoutSessionId": "9c9b1e2e-1111-4a11-8a11-000000000001" }
-// response 200 (Fitbit not synced yet)
-{ "status": "PENDING", "importedCounts": { "heartRateSamples": 0 }, "retryAfter": 42, "data": { "dailyMetrics": [], "cardioActivities": [], "heartRateSamples": [], "exerciseHeartRateSummaries": [] } }
-// response 200 (synced)
-{ "status": "SYNCED", "importedCounts": { "heartRateSamples": 2312 }, "retryAfter": null, "data": { "dailyMetrics": [], "cardioActivities": [], "heartRateSamples": [{ "workoutSessionId": "...", "sampledAt": "2026-08-01T10:02:00.000Z", "bpm": 135 }], "exerciseHeartRateSummaries": [{ "exerciseSessionId": "...", "averageBpm": 132.5, "maximumBpm": 150, "recoveryDeltaBpm": 25, "sampleCount": 3 }] } }
-```
-```json
-// request
-{ "mode": "RETENTION_CLEANUP" }
-// response 200
-{ "status": "SYNCED", "importedCounts": { "deletedHrSamples": 143 }, "retryAfter": null }
-```
-
-**Errors** (all three functions except the oauth-callback redirect path) use
-the frozen shape:
-```json
-{ "error": { "code": "FITBIT_NOT_CONNECTED", "message": "Fitbit account is not connected", "retryable": false, "retryAfterSeconds": null } }
-```
-Stable codes emitted by this module: `FITBIT_UNAUTHORIZED`,
-`FITBIT_NOT_CONNECTED`, `FITBIT_INVALID_OAUTH_STATE`, `FITBIT_RATE_LIMITED`,
-`FITBIT_UPSTREAM_ERROR`, `FITBIT_BAD_REQUEST`, `FITBIT_TOKEN_EXCHANGE_FAILED`.
+**Not run — no JDK/Android SDK/emulator available in this sandbox:**
+- `HealthConnectGateway.kt`, `HealthConnectSyncGateway.kt` — written against
+  the `androidx.health.connect:connect-client` API surface as documented,
+  never compiled. Verify the API shapes (`ReadRecordsRequest`,
+  `AggregateGroupByPeriodRequest`, `TimeRangeFilter.between`,
+  `HeartRateRecord.samples`, `PermissionController`) against the actual
+  library version once a real build is available — Health Connect's Kotlin
+  API has had breaking changes across alpha releases historically, and the
+  pinned version above was not confirmed against Google Maven.
+- `HrExerciseMatcherTest.kt` — written to mirror
+  `fitbit-tests/hr-window.test.ts`'s coverage exactly (including the same
+  squat/bench/not-worn fixture values), but never run with
+  `./gradlew :core:network:test`. Do not treat this as "tests passing" —
+  it is unverified source, consistent with the rest of this repo's Kotlin
+  code (see IMPLEMENTATION_PLAN.md section 1: "Prototyp nie był
+  kompilowany").
+- No real Health Connect device/emulator round-trip was performed — nothing
+  in this sandbox can install the Health Connect provider app or grant
+  runtime permissions.
 
 ## Required Supabase secrets
 
-| Secret | Purpose |
-|---|---|
-| `FITBIT_CLIENT_ID` | Fitbit "Personal" app client id |
-| `FITBIT_CLIENT_SECRET` | Fitbit app client secret — used only inside `fitbit-oauth-callback`/`fitbit-sync`'s token-refresh path, never returned or logged |
-| `FITBIT_TOKEN_ENC_KEY` | base64-encoded 32-byte AES-256 key for encrypting stored tokens (generate with `node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"`) |
-| `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` | standard Supabase-provided function secrets, used for the service-role client |
+None added or removed by this change. `FITBIT_CLIENT_ID`/
+`FITBIT_CLIENT_SECRET`/`FITBIT_TOKEN_ENC_KEY` are no longer read by any
+function (safe to leave configured or remove — nothing depends on them);
+`SUPABASE_URL`/`SUPABASE_SERVICE_ROLE_KEY` are still used by the trimmed
+`fitbit-sync`.
 
-The Fitbit app's OAuth **Redirect URL** must be set (in the Fitbit developer
-console) to this function's deployed `fitbit-oauth-callback` URL.
+## Known limitations (current, see the ADR for full context)
 
-## Known limitations
-
-1. **Timezone handling** — `computeHrWindow`/`splitWindowByDay` operate in
-   UTC. Fitbit's intraday endpoint is scoped to the user's Fitbit-account
-   timezone, not UTC. For most single-timezone users this is invisible, but
-   a workout that starts very close to local midnight in a non-UTC timezone
-   could compute a UTC day-split that doesn't line up with Fitbit's actual
-   day boundary. Not exercised by fixtures; flagged for follow-up if
-   multi-timezone correctness becomes a requirement.
-2. **`fitbit_sync_cursors` table exists but isn't used yet** — `DAILY_METRICS`
-   mode currently always re-pulls the last 7 days rather than resuming from a
-   cursor. Cheap to fix later (the table is already migrated) but not wired
-   up, since 7-day re-pull is idempotent (`upsert` on `(user_id, metric_date)`
-   / `(user_id, fitbit_log_id)`) and cheap enough for a personal-use app.
-3. **Retention cleanup isn't scheduled** — `RETENTION_CLEANUP` mode and the
-   underlying `fitbit_purge_expired_hr_samples()` SQL function exist and are
-   invokable, but nothing in this module wires up a cron/schedule to call it
-   automatically. Needs a `pg_cron` job or an external scheduler hitting
-   `fitbit-sync` with `{"mode":"RETENTION_CLEANUP"}` periodically — left to
-   M8/ops since scheduling infrastructure is outside this module's owned
-   paths.
-4. **No live-API verification** — see "How to test" above; everything was
-   validated against fixtures/fakes, not the real Fitbit API or a live
-   Supabase instance, since neither was available in this environment.
+1. **Health-Connect push is not offline-durable.** `HealthConnectSyncGateway`
+   calls `/sync-batch` directly rather than through the local Room outbox —
+   if the app is killed mid-push or the request fails, the read is lost
+   rather than retried by the periodic `SyncWorker`. Fixing this needs new
+   Room entities/DAO support in files owned by M1; flagged, not silently
+   dropped (see `HealthConnectSyncGateway`'s class doc).
+2. **No local version tracking across pushes.** Every push is a `CREATE`
+   with `baseVersion = null` and a deterministic (name-derived) entity id;
+   there is no read-modify-write cycle against the server's current version.
+   Acceptable for now because these rows are append/overwrite-by-day or
+   overwrite-by-(workout,exercise) snapshots, not collaboratively edited
+   state, but a real conflict (e.g. two devices) is not handled specially.
+3. **Health Connect sample granularity is not 1Hz.** See the ADR — do not
+   claim continuous 1-second HR data anywhere downstream; a
+   `HeartRateRecord`'s internal samples can be sparser and irregular.
+4. **Retention cleanup (`RETENTION_CLEANUP` mode) currently has nothing to
+   purge** in the new architecture, since the push path does not write
+   `fitbit_hr_samples`. Left in place rather than deleted in case a future
+   feature starts writing raw samples again (e.g. for a "view raw HR trace"
+   feature) — see the ADR.
+5. **`core/network/FitbitGateway.kt` (`SupabaseFitbitGateway`) now calls dead
+   endpoints and is out of this module's scope to fix.** `core/network/` is
+   M4's exclusive path (IMPLEMENTATION_PLAN.md section 3) — this task
+   explicitly carved out only the new Health Connect files
+   (`HealthConnectGateway.kt`, `HealthConnectSyncGateway.kt`,
+   `HrExerciseMatcher.kt`) as an exception, not the pre-existing
+   `FitbitGateway.kt`/`SupabaseFitbitGatewayTest.kt`. That file's
+   `startOAuth()` POSTs to `/fitbit-oauth-start` (deleted) and `sync()` can
+   request `FitbitSyncMode.DAILY_METRICS`/`WORKOUT_HR` (both removed from
+   `fitbit-sync`, which now only understands `RETENTION_CLEANUP`, a mode
+   `FitbitSyncMode` doesn't even have a case for). Calling either from the
+   app today gets a 404 or `FITBIT_BAD_REQUEST`, not a clean "not
+   supported" error. **This needs M4 (or the coordinator) to either delete
+   `FitbitGateway.kt`/its test or repoint it at `HealthConnectGateway`** —
+   flagged here rather than edited directly, since silently rewriting
+   another module's exclusively-owned file risked exactly the kind of
+   cross-agent collision the ownership convention exists to prevent.
+6. **Timezone handling in `HealthConnectGateway.readDailyMetrics`** uses the
+   device's local `ZoneId.systemDefault()` for day bucketing (steps/sleep/
+   RHR), which is more correct than the old Fitbit pipeline's UTC-only
+   bucketing (see the old handoff's timezone caveat) since it's the same
+   zone the phone's own Health Connect data was recorded relative to — but
+   this has not been exercised against a real device across a DST
+   transition or timezone change.
