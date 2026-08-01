@@ -56,6 +56,14 @@ interface PlanRepository {
     suspend fun importExerciseLibraryFromJson(json: String)
 
     suspend fun findSwapCandidates(exerciseId: String, availableEquipment: Set<String>, limit: Int = 3): List<Exercise>
+
+    fun observeExerciseLibrary(): Flow<List<Exercise>>
+    suspend fun getExercise(exerciseId: String): Exercise?
+
+    /** Upserts a single exercise library entry — used by plan creation UIs to
+     * register a brand-new custom exercise before referencing its id in a
+     * [com.fittrack.core.model.PlanExercise]. */
+    suspend fun upsertExercise(exercise: Exercise)
 }
 
 interface WorkoutRepository {
