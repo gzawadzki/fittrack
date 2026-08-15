@@ -50,8 +50,14 @@ interface HealthConnectGateway {
      * last [days] calendar days in the device's local time zone, most recent
      * first. Missing values are `null`, never `0` — same never-false-zero
      * convention as the old Fitbit pipeline.
+     *
+     * Steps, sleep and resting heart rate are read independently: if one
+     * type's read fails, the outcome is [HealthConnectReadOutcome.PartiallyFailed]
+     * carrying whatever the other types produced, rather than losing all
+     * three. Only fails outright ([HealthConnectReadOutcome.Failed]) if every
+     * one of the three reads failed.
      */
-    suspend fun readDailyMetrics(days: Int = 14): List<HealthConnectDailyMetric>
+    suspend fun readDailyMetrics(days: Int = 14): HealthConnectReadOutcome<List<HealthConnectDailyMetric>>
 
     /**
      * Heart-rate samples covering `[startedAt - 5min, endedAt + 5min]`
@@ -65,7 +71,27 @@ interface HealthConnectGateway {
         workoutStartedAt: Instant,
         workoutEndedAt: Instant,
         exercises: List<ExerciseTimeRange>,
-    ): WorkoutHeartRateReadResult
+    ): HealthConnectReadOutcome<WorkoutHeartRateReadResult>
+}
+
+/** Which of [HealthConnectGateway.readDailyMetrics]'s three independent
+ * Health Connect record types a read failure applies to. */
+enum class HealthMetricType { STEPS, SLEEP, RESTING_HEART_RATE }
+
+/**
+ * Outcome of a Health Connect read. Distinguishes "the platform read
+ * succeeded and returned this (possibly empty) data" from "the read itself
+ * failed" — collapsing the two into the same empty shape hid real read
+ * failures from callers that need to retry them (see the M8 architecture
+ * review, candidate 1). [PartiallyFailed] only applies to reads composed of
+ * more than one independent Health Connect call (currently just
+ * [HealthConnectGateway.readDailyMetrics]); callers of single-call reads
+ * only ever see [Ok] or [Failed].
+ */
+sealed interface HealthConnectReadOutcome<out T> {
+    data class Ok<T>(val data: T) : HealthConnectReadOutcome<T>
+    data class PartiallyFailed<T>(val data: T, val failedTypes: Set<HealthMetricType>) : HealthConnectReadOutcome<T>
+    data class Failed(val error: NetworkError) : HealthConnectReadOutcome<Nothing>
 }
 
 data class HealthConnectDailyMetric(
@@ -78,6 +104,18 @@ data class HealthConnectDailyMetric(
 data class WorkoutHeartRateReadResult(
     val samples: List<HrSample>,
     val aggregates: List<ExerciseHrAggregate>,
+)
+
+/**
+ * Classifies a Health Connect read failure. [SecurityException] means the
+ * permission was revoked mid-session — retrying won't help until the user
+ * re-grants it in Settings, so it is the one case marked non-retryable; any
+ * other exception is treated as a transient platform hiccup.
+ */
+internal fun Throwable.toHealthConnectReadError(): NetworkError = NetworkError(
+    code = "HEALTH_CONNECT_READ_FAILED",
+    userMessage = "Nie można teraz odczytać danych z Health Connect.",
+    retryable = this !is SecurityException,
 )
 
 class AndroidHealthConnectGateway(
@@ -110,19 +148,40 @@ class AndroidHealthConnectGateway(
         return granted.containsAll(requiredPermissions())
     }
 
-    override suspend fun readDailyMetrics(days: Int): List<HealthConnectDailyMetric> {
+    override suspend fun readDailyMetrics(days: Int): HealthConnectReadOutcome<List<HealthConnectDailyMetric>> {
         require(days > 0) { "days must be positive" }
-        val hc = client ?: return emptyList()
+        val hc = client ?: return HealthConnectReadOutcome.Ok(emptyDailyMetrics(days))
 
         val today = LocalDate.now(zoneId)
         val startZoned = today.minusDays((days - 1).toLong()).atStartOfDay(zoneId)
         val endZoned = today.plusDays(1).atStartOfDay(zoneId)
 
-        val stepsByDay = readStepsByDay(hc, startZoned, endZoned)
-        val sleepByDay = readSleepMinutesByDay(hc, startZoned, endZoned)
-        val restingHrByDay = readRestingHeartRateByDay(hc, startZoned, endZoned)
+        val failedTypes = mutableSetOf<HealthMetricType>()
+        var lastFailure: Throwable? = null
 
-        return (0 until days).map { offset ->
+        val stepsByDay = try {
+            readStepsByDay(hc, startZoned, endZoned)
+        } catch (e: Exception) {
+            failedTypes += HealthMetricType.STEPS
+            lastFailure = e
+            emptyMap()
+        }
+        val sleepByDay = try {
+            readSleepMinutesByDay(hc, startZoned, endZoned)
+        } catch (e: Exception) {
+            failedTypes += HealthMetricType.SLEEP
+            lastFailure = e
+            emptyMap()
+        }
+        val restingHrByDay = try {
+            readRestingHeartRateByDay(hc, startZoned, endZoned)
+        } catch (e: Exception) {
+            failedTypes += HealthMetricType.RESTING_HEART_RATE
+            lastFailure = e
+            emptyMap()
+        }
+
+        val metrics = (0 until days).map { offset ->
             val date = today.minusDays(offset.toLong())
             val key = date.toString()
             HealthConnectDailyMetric(
@@ -132,14 +191,20 @@ class AndroidHealthConnectGateway(
                 steps = stepsByDay[key],
             )
         }
+
+        return when {
+            failedTypes.size == 3 -> HealthConnectReadOutcome.Failed(lastFailure!!.toHealthConnectReadError())
+            failedTypes.isEmpty() -> HealthConnectReadOutcome.Ok(metrics)
+            else -> HealthConnectReadOutcome.PartiallyFailed(metrics, failedTypes)
+        }
     }
 
     override suspend fun readWorkoutHeartRate(
         workoutStartedAt: Instant,
         workoutEndedAt: Instant,
         exercises: List<ExerciseTimeRange>,
-    ): WorkoutHeartRateReadResult {
-        val hc = client ?: return WorkoutHeartRateReadResult(emptyList(), emptyList())
+    ): HealthConnectReadOutcome<WorkoutHeartRateReadResult> {
+        val hc = client ?: return HealthConnectReadOutcome.Ok(WorkoutHeartRateReadResult(emptyList(), emptyList()))
         val window = HrExerciseMatcher.computeHrWindow(workoutStartedAt, workoutEndedAt)
 
         val records = try {
@@ -150,7 +215,7 @@ class AndroidHealthConnectGateway(
                 ),
             ).records
         } catch (e: Exception) {
-            return WorkoutHeartRateReadResult(emptyList(), emptyList())
+            return HealthConnectReadOutcome.Failed(e.toHealthConnectReadError())
         }
 
         // Each HeartRateRecord spans [startTime, endTime] and holds a list of
@@ -162,7 +227,19 @@ class AndroidHealthConnectGateway(
             .filter { !it.sampledAt.isBefore(window.start) && !it.sampledAt.isAfter(window.end) }
 
         val aggregates = HrExerciseMatcher.matchAndAggregate(samples, exercises)
-        return WorkoutHeartRateReadResult(samples = samples, aggregates = aggregates)
+        return HealthConnectReadOutcome.Ok(WorkoutHeartRateReadResult(samples = samples, aggregates = aggregates))
+    }
+
+    private fun emptyDailyMetrics(days: Int): List<HealthConnectDailyMetric> {
+        val today = LocalDate.now(zoneId)
+        return (0 until days).map { offset ->
+            HealthConnectDailyMetric(
+                date = today.minusDays(offset.toLong()).toString(),
+                sleepMinutes = null,
+                restingHeartRate = null,
+                steps = null,
+            )
+        }
     }
 
     private suspend fun readStepsByDay(
@@ -170,17 +247,13 @@ class AndroidHealthConnectGateway(
         start: ZonedDateTime,
         end: ZonedDateTime,
     ): Map<String, Int> {
-        val response = try {
-            hc.aggregateGroupByPeriod(
-                AggregateGroupByPeriodRequest(
-                    metrics = setOf(StepsRecord.COUNT_TOTAL),
-                    timeRangeFilter = TimeRangeFilter.between(start.toLocalDateTime(), end.toLocalDateTime()),
-                    timeRangeSlicer = Period.ofDays(1),
-                ),
-            )
-        } catch (e: Exception) {
-            return emptyMap()
-        }
+        val response = hc.aggregateGroupByPeriod(
+            AggregateGroupByPeriodRequest(
+                metrics = setOf(StepsRecord.COUNT_TOTAL),
+                timeRangeFilter = TimeRangeFilter.between(start.toLocalDateTime(), end.toLocalDateTime()),
+                timeRangeSlicer = Period.ofDays(1),
+            ),
+        )
         return buildMap {
             response.forEach { bucket ->
                 val total = bucket.result[StepsRecord.COUNT_TOTAL] ?: return@forEach
@@ -196,16 +269,12 @@ class AndroidHealthConnectGateway(
     ): Map<String, Int> {
         // Sleep sessions are attributed to the day they *end* on (wake-up
         // day), matching how the old Fitbit sleep log was keyed by date.
-        val sessions = try {
-            hc.readRecords(
-                ReadRecordsRequest(
-                    recordType = SleepSessionRecord::class,
-                    timeRangeFilter = TimeRangeFilter.between(start.toInstant(), end.toInstant()),
-                ),
-            ).records
-        } catch (e: Exception) {
-            return emptyMap()
-        }
+        val sessions = hc.readRecords(
+            ReadRecordsRequest(
+                recordType = SleepSessionRecord::class,
+                timeRangeFilter = TimeRangeFilter.between(start.toInstant(), end.toInstant()),
+            ),
+        ).records
 
         val minutesByDay = mutableMapOf<String, Long>()
         sessions.forEach { session ->
@@ -221,16 +290,12 @@ class AndroidHealthConnectGateway(
         start: ZonedDateTime,
         end: ZonedDateTime,
     ): Map<String, Int> {
-        val records = try {
-            hc.readRecords(
-                ReadRecordsRequest(
-                    recordType = RestingHeartRateRecord::class,
-                    timeRangeFilter = TimeRangeFilter.between(start.toInstant(), end.toInstant()),
-                ),
-            ).records
-        } catch (e: Exception) {
-            return emptyMap()
-        }
+        val records = hc.readRecords(
+            ReadRecordsRequest(
+                recordType = RestingHeartRateRecord::class,
+                timeRangeFilter = TimeRangeFilter.between(start.toInstant(), end.toInstant()),
+            ),
+        ).records
 
         // If a device writes more than one resting-HR reading for a day, keep
         // the latest one for that day, mirroring "one value per day" from the

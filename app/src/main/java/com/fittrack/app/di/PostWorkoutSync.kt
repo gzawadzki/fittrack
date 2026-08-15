@@ -14,6 +14,7 @@ import androidx.work.workDataOf
 import com.fittrack.app.FitTrackApplication
 import com.fittrack.core.model.FitbitSyncStatus
 import com.fittrack.core.network.ExerciseTimeRange
+import com.fittrack.core.network.HealthConnectReadOutcome
 import com.fittrack.core.network.SyncResult
 import com.fittrack.core.network.SyncWorker
 import com.fittrack.core.network.toFitbitDataPayload
@@ -53,6 +54,20 @@ class PostWorkoutHealthConnectWorker(appContext: Context, params: WorkerParamete
     override suspend fun doWork(): Result {
         val workoutId = inputData.getString(PostWorkoutSyncScheduler.INPUT_WORKOUT_ID) ?: return Result.failure()
         val container = (applicationContext as FitTrackApplication).container
+        val gateway = container.healthConnectGateway
+
+        // Health Connect being unavailable or not permitted is a permanent
+        // condition until the user acts in Settings, not a transient one —
+        // retrying would just waste battery. Checked here (rather than left
+        // for readWorkoutHeartRate to discover) because this worker, unlike
+        // SettingsViewModel, never gated entry on isAvailable()/
+        // hasAllPermissions() in the first place.
+        val permitted = try {
+            gateway.isAvailable() && gateway.hasAllPermissions()
+        } catch (e: Exception) {
+            false
+        }
+        if (!permitted) return Result.failure()
 
         val workout = container.workoutRepository.getWorkout(workoutId) ?: return Result.failure()
         val endedAt = workout.endedAt ?: return Result.retry()
@@ -63,12 +78,19 @@ class PostWorkoutHealthConnectWorker(appContext: Context, params: WorkerParamete
             ExerciseTimeRange(exerciseId = session.id, startAt = startedAt, endAt = sessionEndedAt)
         }
 
-        return try {
-            val readResult = container.healthConnectGateway.readWorkoutHeartRate(
+        val readResult = when (
+            val outcome = gateway.readWorkoutHeartRate(
                 workoutStartedAt = workout.startedAt,
                 workoutEndedAt = endedAt,
                 exercises = exerciseRanges,
             )
+        ) {
+            is HealthConnectReadOutcome.Ok -> outcome.data
+            is HealthConnectReadOutcome.PartiallyFailed -> outcome.data
+            is HealthConnectReadOutcome.Failed -> return if (outcome.error.retryable) Result.retry() else Result.failure()
+        }
+
+        return try {
             val syncedAt = Instant.now()
             container.fitbitDataRepository.persist(
                 readResult.toFitbitDataPayload(

@@ -7,6 +7,7 @@ import com.fittrack.core.model.repository.HealthRepository
 import com.fittrack.core.network.AuthRepository
 import com.fittrack.core.network.AuthResult
 import com.fittrack.core.network.HealthConnectGateway
+import com.fittrack.core.network.HealthConnectReadOutcome
 import com.fittrack.core.network.HealthConnectSyncGateway
 import com.fittrack.core.network.SyncResult
 import com.fittrack.core.network.toHealthDays
@@ -182,7 +183,25 @@ class SettingsViewModel(
         }
         viewModelScope.launch {
             try {
-                val metrics = healthConnectGateway.readDailyMetrics()
+                val metrics = when (val outcome = healthConnectGateway.readDailyMetrics()) {
+                    is HealthConnectReadOutcome.Ok -> outcome.data
+                    is HealthConnectReadOutcome.PartiallyFailed -> {
+                        // TODO: surface outcome.failedTypes in the UI instead of
+                        // silently treating a partial read the same as a full
+                        // one — deferred scope decision, see the M8
+                        // architecture review (candidate 1) / grilling notes.
+                        outcome.data
+                    }
+                    is HealthConnectReadOutcome.Failed -> {
+                        _state.update {
+                            it.copy(
+                                healthConnectSyncState = HealthConnectSyncState.ERROR,
+                                healthConnectErrorMessage = outcome.error.userMessage,
+                            )
+                        }
+                        return@launch
+                    }
+                }
                 healthRepository.upsertDailyHealth(metrics.toHealthDays())
                 when (val pushResult = healthConnectSyncGateway.pushDailyMetrics(metrics)) {
                     is SyncResult.Success -> _state.update {
