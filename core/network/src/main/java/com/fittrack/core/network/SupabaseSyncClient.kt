@@ -1,5 +1,6 @@
 package com.fittrack.core.network
 
+import android.util.Log
 import org.json.JSONObject
 
 class SupabaseSyncClient(
@@ -13,6 +14,7 @@ class SupabaseSyncClient(
         var response = try {
             post(session, request)
         } catch (e: Exception) {
+            Log.e("SupabaseSyncClient", "post failed: ${e.javaClass.name}: ${e.message}", e)
             return SyncResult.Failure(NetworkError("NETWORK_ERROR", "Nie udało się połączyć z serwerem.", true))
         }
         if (response.status == 401) {

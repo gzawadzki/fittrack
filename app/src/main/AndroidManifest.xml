@@ -4,6 +4,15 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
+    <!-- Health Connect read permissions - must match HealthConnectGateway.requiredPermissions()
+         (core/network/HealthConnectGateway.kt) exactly, or PermissionController filters the
+         whole request down to nothing and the system dialog silently never appears. -->
+    <uses-permission android:name="android.permission.health.READ_STEPS" />
+    <uses-permission android:name="android.permission.health.READ_SLEEP" />
+    <uses-permission android:name="android.permission.health.READ_RESTING_HEART_RATE" />
+    <uses-permission android:name="android.permission.health.READ_EXERCISE" />
+    <uses-permission android:name="android.permission.health.READ_HEART_RATE" />
+
     <application
         android:name=".FitTrackApplication"
         android:allowBackup="true"
@@ -22,6 +31,28 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- Required for the Health Connect permission dialog to appear at all. Health
+             Connect's own PermissionsActivity (com.google.android.healthconnect.controller,
+             HealthPermissionReader.isRationaleIntentDeclared, confirmed by decompiling the
+             on-device APK - the actual check does NOT use
+             androidx.health.ACTION_SHOW_PERMISSIONS_RATIONALE, despite that being the name
+             suggested by most online examples) calls queryIntentActivities() for
+             ACTION_VIEW_PERMISSION_USAGE + CATEGORY_HEALTH_PERMISSIONS scoped to this app's
+             package, and silently finishes without showing the grant dialog if nothing
+             resolves. Points at MainActivity, which doesn't branch on this action today and
+             just opens the normal app; a dedicated privacy-policy screen here is a reasonable
+             follow-up, not required to unblock the grant flow itself. -->
+        <activity-alias
+            android:name=".PermissionsRationaleActivity"
+            android:exported="true"
+            android:targetActivity=".MainActivity"
+            android:permission="android.permission.START_VIEW_PERMISSION_USAGE">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW_PERMISSION_USAGE" />
+                <category android:name="android.intent.category.HEALTH_PERMISSIONS" />
+            </intent-filter>
+        </activity-alias>
 
         <!-- BootReceiver is declared in platform/reminders' own manifest and merges in
              automatically; see docs/architecture.md for the module wiring note. -->

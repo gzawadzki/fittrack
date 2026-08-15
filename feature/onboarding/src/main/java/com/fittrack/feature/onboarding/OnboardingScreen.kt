@@ -2,6 +2,7 @@ package com.fittrack.feature.onboarding
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
@@ -10,10 +11,13 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.LaunchedEffect
@@ -81,7 +85,13 @@ fun OnboardingScreen(
         } else {
             item { PromptField("Jaki jest Twój główny cel?", state.draft.goal) { value -> onChange { it.copy(goal = value) } } }
             item { PromptField("Doświadczenie treningowe", state.draft.experience) { value -> onChange { it.copy(experience = value) } } }
-            item { PromptField("Dostępny sprzęt, po przecinku", state.draft.equipment) { value -> onChange { it.copy(equipment = value) } } }
+            item {
+                EquipmentChecklist(state.draft.equipment) { key ->
+                    onChange { draft ->
+                        draft.copy(equipment = if (key in draft.equipment) draft.equipment - key else draft.equipment + key)
+                    }
+                }
+            }
             item { PromptField("Dni i godziny treningów", state.draft.schedule) { value -> onChange { it.copy(schedule = value) } } }
             item { PromptField("Ograniczenia lub urazy", state.draft.constraints) { value -> onChange { it.copy(constraints = value) } } }
             item { PromptField("Preferencje", state.draft.preferences) { value -> onChange { it.copy(preferences = value) } } }
@@ -95,13 +105,26 @@ fun OnboardingScreen(
 private fun PromptField(label: String, value: String, update: (String) -> Unit) =
     OutlinedTextField(value = value, onValueChange = update, label = { Text(label) }, modifier = Modifier.fillMaxWidth())
 
+@OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
+@Composable
+private fun EquipmentChecklist(selected: Set<String>, onToggle: (String) -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text("Dostępny sprzęt", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            EquipmentOption.ALL.forEach { (key, label) ->
+                FilterChip(selected = key in selected, onClick = { onToggle(key) }, label = { Text(label) })
+            }
+        }
+    }
+}
+
 @Composable
 private fun ProfileSummary(draft: ProfileDraft) {
     FitTrackCard(Modifier.fillMaxWidth()) {
             listOf(
                 "Cel" to draft.goal,
                 "Doświadczenie" to draft.experience,
-                "Sprzęt" to draft.equipment,
+                "Sprzęt" to draft.equipment.sorted().joinToString(", ") { EquipmentOption.label(it) },
                 "Harmonogram" to draft.schedule,
                 "Ograniczenia" to draft.constraints,
                 "Preferencje" to draft.preferences,

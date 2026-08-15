@@ -12,10 +12,26 @@ import kotlinx.coroutines.launch
 import java.io.Serializable
 import java.util.UUID
 
+/** Equipment types the exercise library knows about, with their Polish
+ * display labels. Most users train at a reasonably well-equipped gym missing
+ * only a few things, so onboarding defaults every type to selected and asks
+ * the user to uncheck what they don't have, rather than starting empty. */
+object EquipmentOption {
+    val ALL: List<Pair<String, String>> = listOf(
+        "BARBELL" to "Sztanga",
+        "DUMBBELL" to "Hantle",
+        "MACHINE" to "Maszyny",
+        "CABLE" to "Wyciągi",
+        "BODYWEIGHT" to "Masa własna",
+    )
+    val KEYS: Set<String> = ALL.map { it.first }.toSet()
+    fun label(key: String): String = ALL.firstOrNull { it.first == key }?.second ?: key
+}
+
 data class ProfileDraft(
     val goal: String = "",
     val experience: String = "",
-    val equipment: String = "",
+    val equipment: Set<String> = EquipmentOption.KEYS,
     val schedule: String = "",
     val constraints: String = "",
     val preferences: String = "",
@@ -69,7 +85,7 @@ class OnboardingViewModel(
                     id = current?.id ?: UUID.randomUUID().toString(),
                     goal = draft.goal.trim(),
                     experience = draft.experience.trim(),
-                    equipment = draft.equipment.split(',').map { it.trim().uppercase() }.filter { it.isNotBlank() }.toSet(),
+                    equipment = draft.equipment,
                     schedule = draft.schedule.trim(),
                     constraints = draft.constraints.trim(),
                     preferences = draft.preferences.trim(),
@@ -91,7 +107,7 @@ class OnboardingViewModel(
     private fun validate(draft: ProfileDraft): String? = when {
         draft.goal.isBlank() -> "Podaj główny cel"
         draft.experience.isBlank() -> "Podaj doświadczenie treningowe"
-        draft.equipment.isBlank() -> "Podaj dostępny sprzęt"
+        draft.equipment.isEmpty() -> "Zaznacz co najmniej jeden dostępny sprzęt"
         draft.schedule.isBlank() -> "Podaj planowane dni i godziny"
         else -> null
     }

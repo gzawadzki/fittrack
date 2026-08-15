@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -32,12 +33,13 @@ fun SettingsScreen(
     onRetry: () -> Unit,
     onGrantHealthConnectPermissions: () -> Unit,
     onSyncHealthConnect: () -> Unit,
+    onSyncNow: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     when {
         state.isLoading -> LoadingState("Ładowanie ustawień…", modifier)
         state.loadErrorMessage != null -> ErrorState(state.loadErrorMessage, onRetry, modifier)
-        state.isAuthenticated -> SignedInSettings(state, onLogout, onGrantHealthConnectPermissions, onSyncHealthConnect, modifier)
+        state.isAuthenticated -> SignedInSettings(state, onLogout, onGrantHealthConnectPermissions, onSyncHealthConnect, onSyncNow, modifier)
         else -> LoginForm(state, onLogin, modifier)
     }
 }
@@ -72,6 +74,7 @@ private fun SignedInSettings(
     onLogout: () -> Unit,
     onGrantHealthConnectPermissions: () -> Unit,
     onSyncHealthConnect: () -> Unit,
+    onSyncNow: () -> Unit,
     modifier: Modifier,
 ) {
     Column(modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
@@ -88,6 +91,15 @@ private fun SignedInSettings(
                     onClick = onLogout,
                     enabled = !state.isSubmitting,
                 )
+        }
+        FitTrackCard(Modifier.fillMaxWidth()) {
+                Text("Synchronizacja danych", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    "Plany, ćwiczenia i historia treningów synchronizują się automatycznie co 15 minut.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                OutlinedButton(onClick = onSyncNow, modifier = Modifier.fillMaxWidth()) { Text("Synchronizuj teraz") }
         }
         HealthConnectCard(state, onGrantHealthConnectPermissions, onSyncHealthConnect)
         Text("Dane zdrowotne pochodzą z Health Connect i są odczytywane wyłącznie na urządzeniu.", style = MaterialTheme.typography.bodySmall)
