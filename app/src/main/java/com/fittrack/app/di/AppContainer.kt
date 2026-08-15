@@ -104,6 +104,11 @@ class AppContainer(private val application: Application) {
         HealthConnectSyncGateway(syncClient ?: UnavailableSyncClient)
 
     fun start() {
+        PostWorkoutSyncDependencies.workoutRepository = workoutRepository
+        PostWorkoutSyncDependencies.healthConnectGateway = healthConnectGateway
+        PostWorkoutSyncDependencies.fitbitDataRepository = fitbitDataRepository
+        PostWorkoutSyncDependencies.healthConnectSyncGateway = healthConnectSyncGateway
+
         syncOrchestrator?.let { orchestrator ->
             NetworkWorkDependencies.syncOrchestrator = orchestrator
             NetworkWorkScheduler.schedule(application)
