@@ -269,6 +269,14 @@ class RoomWorkoutRepository(private val database: FitTrackDatabase) : WorkoutRep
         outbox.upsert(SyncEntityType.WORKOUT_SESSIONS, cancelled.id, cancelled.serverVersion, cancelled.syncData(), now)
     }
 
+    override suspend fun deleteWorkout(workoutId: String) = database.withTransaction {
+        val existing = requireNotNull(dao.getWorkout(workoutId)) { "Workout $workoutId does not exist" }
+        require(existing.status == "COMPLETED") { "Only a completed workout can be deleted from history" }
+        val now = now()
+        dao.tombstoneWorkout(workoutId, now)
+        outbox.delete(SyncEntityType.WORKOUT_SESSIONS, workoutId, existing.serverVersion, now)
+    }
+
     override fun observePendingSuggestions(): Flow<List<CoachSuggestion>> =
         dao.observePendingSuggestions().map { list -> list.map { it.toDomain() } }
 

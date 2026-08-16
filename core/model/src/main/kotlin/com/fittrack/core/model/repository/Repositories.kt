@@ -122,6 +122,11 @@ interface WorkoutRepository {
 
     suspend fun cancelWorkout(workoutId: String)
 
+    /** Soft-deletes (tombstones) a COMPLETED workout from history; it stops
+     * appearing in [observeHistory] but is retained locally for sync
+     * purposes, matching [PlanRepository.deletePlan]. */
+    suspend fun deleteWorkout(workoutId: String)
+
     fun observePendingSuggestions(): Flow<List<CoachSuggestion>>
     suspend fun getSuggestion(id: String): CoachSuggestion?
     suspend fun saveSuggestions(suggestions: List<CoachSuggestion>)

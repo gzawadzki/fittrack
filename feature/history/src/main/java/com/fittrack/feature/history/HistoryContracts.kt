@@ -61,6 +61,9 @@ data class HistoryState(
     val cardioUnavailableMessage: String? = null,
     val heartRateUnavailableMessage: String? = null,
     val summary: HistorySummary = HistorySummary(),
+    val pendingDeleteWorkoutId: String? = null,
+    val isDeleting: Boolean = false,
+    val deleteErrorMessage: String? = null,
 )
 
 data class HistorySummary(

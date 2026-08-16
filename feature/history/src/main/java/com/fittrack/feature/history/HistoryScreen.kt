@@ -1,7 +1,8 @@
 package com.fittrack.feature.history
 
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -10,11 +11,13 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
@@ -50,21 +53,65 @@ fun HistoryRoute(
     modifier: Modifier = Modifier,
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
-    HistoryScreen(state = state, onRetry = viewModel::refresh, modifier = modifier)
+    HistoryScreen(
+        state = state,
+        onRetry = viewModel::refresh,
+        onRequestDelete = viewModel::requestDeleteWorkout,
+        onConfirmDelete = viewModel::confirmDeleteWorkout,
+        onCancelDelete = viewModel::cancelDeleteWorkout,
+        modifier = modifier,
+    )
 }
 
 @Composable
-fun HistoryScreen(state: HistoryState, onRetry: () -> Unit, modifier: Modifier = Modifier) {
+fun HistoryScreen(
+    state: HistoryState,
+    onRetry: () -> Unit,
+    onRequestDelete: (String) -> Unit = {},
+    onConfirmDelete: () -> Unit = {},
+    onCancelDelete: () -> Unit = {},
+    modifier: Modifier = Modifier,
+) {
     when {
         state.isLoading -> LoadingState("Ładowanie historii…", modifier)
         state.errorMessage != null -> ErrorState(state.errorMessage, onRetry, modifier)
-        else -> HistoryContent(state, onRetry, modifier)
+        else -> HistoryContent(state, onRetry, onRequestDelete, onConfirmDelete, onCancelDelete, modifier)
     }
 }
 
 @Composable
-private fun HistoryContent(state: HistoryState, onRefresh: () -> Unit, modifier: Modifier) {
+private fun HistoryContent(
+    state: HistoryState,
+    onRefresh: () -> Unit,
+    onRequestDelete: (String) -> Unit,
+    onConfirmDelete: () -> Unit,
+    onCancelDelete: () -> Unit,
+    modifier: Modifier,
+) {
     var selectedTab by remember { mutableIntStateOf(0) }
+    if (state.pendingDeleteWorkoutId != null) {
+        AlertDialog(
+            onDismissRequest = onCancelDelete,
+            title = { Text("Usunąć trening?") },
+            text = {
+                Text(
+                    if (state.deleteErrorMessage != null) {
+                        state.deleteErrorMessage
+                    } else {
+                        "Ta operacja usunie trening z historii. Nie można jej cofnąć."
+                    },
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = onConfirmDelete, enabled = !state.isDeleting) {
+                    Text(if (state.isDeleting) "Usuwanie…" else "Usuń")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = onCancelDelete, enabled = !state.isDeleting) { Text("Anuluj") }
+            },
+        )
+    }
     Column(modifier) {
         Column(Modifier.padding(start = 20.dp, top = 24.dp, end = 20.dp, bottom = 14.dp)) {
             Text("HISTORIA", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.secondary)
@@ -95,6 +142,7 @@ private fun HistoryContent(state: HistoryState, onRefresh: () -> Unit, modifier:
                 heartRateUnavailableMessage = state.heartRateUnavailableMessage,
                 isRefreshing = state.isLoading,
                 onRefresh = onRefresh,
+                onRequestDelete = onRequestDelete,
             )
         } else {
             CardioHistory(state.cardio, state.cardioUnavailableMessage, isRefreshing = state.isLoading, onRefresh = onRefresh)
@@ -102,6 +150,7 @@ private fun HistoryContent(state: HistoryState, onRefresh: () -> Unit, modifier:
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun StrengthHistory(
     entries: List<StrengthHistoryItem>,
@@ -110,6 +159,7 @@ private fun StrengthHistory(
     heartRateUnavailableMessage: String?,
     isRefreshing: Boolean,
     onRefresh: () -> Unit,
+    onRequestDelete: (String) -> Unit,
 ) {
     if (entries.isEmpty()) {
         EmptyState("Brak historii treningów", "Ukończony trening pojawi się tutaj.")
@@ -120,7 +170,12 @@ private fun StrengthHistory(
             item { HistorySummaryPanel(summary) }
             items(entries, key = { it.workoutId }) { item ->
                 var expanded by remember(item.workoutId) { mutableStateOf(false) }
-                FitTrackCard(modifier = Modifier.fillMaxWidth().clickable { expanded = !expanded }) {
+                FitTrackCard(
+                    modifier = Modifier.fillMaxWidth().combinedClickable(
+                        onClick = { expanded = !expanded },
+                        onLongClick = { onRequestDelete(item.workoutId) },
+                    ),
+                ) {
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                             Text(item.planName, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                             Text(fitbitLabel(item.fitbitState), style = MaterialTheme.typography.labelSmall, color = fitbitColor(item.fitbitState))

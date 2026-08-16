@@ -10,6 +10,7 @@ import com.fittrack.core.model.WorkoutSession
 import com.fittrack.core.model.WorkoutStatus
 import com.fittrack.core.model.repository.FitbitDataRepository
 import com.fittrack.core.model.repository.WorkoutRepository
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -20,6 +21,7 @@ import kotlinx.coroutines.flow.mapLatest
 import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
 
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class HistoryViewModel(
@@ -27,6 +29,7 @@ class HistoryViewModel(
     private val fitbitDataRepository: FitbitDataRepository,
 ) : ViewModel() {
     private val refreshes = MutableStateFlow(0)
+    private val ui = MutableStateFlow(HistoryUiState())
 
     val state: StateFlow<HistoryState> = refreshes
         .flatMapLatest {
@@ -76,6 +79,13 @@ class HistoryViewModel(
                     )
                 }
         }
+        .combine(ui) { historyState, uiState ->
+            historyState.copy(
+                pendingDeleteWorkoutId = uiState.pendingDeleteWorkoutId,
+                isDeleting = uiState.isDeleting,
+                deleteErrorMessage = uiState.deleteErrorMessage,
+            )
+        }
         .stateIn(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(stopTimeoutMillis = 5_000),
@@ -86,7 +96,36 @@ class HistoryViewModel(
         refreshes.update(Int::inc)
     }
 
+    fun requestDeleteWorkout(workoutId: String) {
+        ui.update { it.copy(pendingDeleteWorkoutId = workoutId, deleteErrorMessage = null) }
+    }
+
+    fun cancelDeleteWorkout() {
+        ui.update { it.copy(pendingDeleteWorkoutId = null) }
+    }
+
+    fun confirmDeleteWorkout() {
+        val workoutId = ui.value.pendingDeleteWorkoutId ?: return
+        if (ui.value.isDeleting) return
+        viewModelScope.launch {
+            ui.update { it.copy(isDeleting = true, deleteErrorMessage = null) }
+            try {
+                workoutRepository.deleteWorkout(workoutId)
+                ui.update { it.copy(isDeleting = false, pendingDeleteWorkoutId = null) }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Throwable) {
+                ui.update { it.copy(isDeleting = false, deleteErrorMessage = "Nie udało się usunąć treningu.") }
+            }
+        }
+    }
 }
+
+private data class HistoryUiState(
+    val pendingDeleteWorkoutId: String? = null,
+    val isDeleting: Boolean = false,
+    val deleteErrorMessage: String? = null,
+)
 
 private data class HistorySources(
     val workouts: List<WorkoutSession>,

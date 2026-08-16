@@ -179,6 +179,7 @@ class PostWorkoutSyncPipelineTest {
         override suspend fun swapExercise(exerciseSessionId: String, replacementExerciseId: String) = throw UnsupportedOperationException()
         override suspend fun finishWorkout(workoutId: String, note: String) = throw UnsupportedOperationException()
         override suspend fun cancelWorkout(workoutId: String) = throw UnsupportedOperationException()
+        override suspend fun deleteWorkout(workoutId: String) = throw UnsupportedOperationException()
         override fun observePendingSuggestions(): Flow<List<CoachSuggestion>> = emptyFlow()
         override suspend fun getSuggestion(id: String): CoachSuggestion? = null
         override suspend fun saveSuggestions(suggestions: List<CoachSuggestion>) = throw UnsupportedOperationException()

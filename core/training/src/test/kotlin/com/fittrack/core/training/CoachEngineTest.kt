@@ -88,6 +88,7 @@ class CoachEngineTest {
         override suspend fun swapExercise(exerciseSessionId: String, replacementExerciseId: String) = Unit
         override suspend fun finishWorkout(workoutId: String, note: String) = throw UnsupportedOperationException()
         override suspend fun cancelWorkout(workoutId: String) = Unit
+        override suspend fun deleteWorkout(workoutId: String) = Unit
         override fun observePendingSuggestions(): Flow<List<CoachSuggestion>> = flowOf(emptyList())
         override suspend fun getSuggestion(id: String): CoachSuggestion? = null
         override suspend fun saveSuggestions(suggestions: List<CoachSuggestion>) = Unit
