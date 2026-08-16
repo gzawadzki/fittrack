@@ -18,6 +18,11 @@ enum class HealthConnectState {
 
 enum class HealthConnectSyncState { IDLE, SYNCING, SYNCED, ERROR }
 
+/** State of the "Synchronizuj teraz" button in the "Synchronizacja danych" card
+ * (plans/exercises/profile/workout history via [com.fittrack.core.network.NetworkWorkScheduler],
+ * distinct from [HealthConnectSyncState]'s own sync button). */
+enum class DataSyncState { IDLE, SYNCING, SYNCED, ERROR }
+
 data class SettingsUiState(
     val isLoading: Boolean = true,
     val loadErrorMessage: String? = null,
@@ -31,6 +36,7 @@ data class SettingsUiState(
     val lastSyncedAt: Instant? = null,
     val lastSyncedDayCount: Int = 0,
     val isSubmitting: Boolean = false,
+    val dataSyncState: DataSyncState = DataSyncState.IDLE,
 ) {
     val isHealthConnectBusy: Boolean
         get() = healthConnectSyncState == HealthConnectSyncState.SYNCING

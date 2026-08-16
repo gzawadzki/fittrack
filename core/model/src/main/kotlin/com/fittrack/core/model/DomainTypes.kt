@@ -163,6 +163,7 @@ data class SetLog(
     val techniqueIssue: Boolean,
     val concerningSymptom: Boolean,
     val completedAt: Instant?,
+    val skipped: Boolean = false,
 )
 
 /** One day of imported wearable health data. Steps are context only — see

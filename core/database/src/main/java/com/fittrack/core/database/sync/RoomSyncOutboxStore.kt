@@ -72,12 +72,20 @@ class RoomSyncOutboxStore(private val database: FitTrackDatabase) : SyncOutboxSt
                 dao.releaseUnacked(batchId, response.ackedOperationIds)
             }
 
-            response.changes.sortedWith(
+            // fitbit_daily_metrics/fitbit_hr_exercise_aggregates are pushed
+            // straight to Supabase by HealthConnectSyncGateway, bypassing
+            // this outbox entirely (see that class's own doc comment) - this
+            // module has no local table shaped to receive them back as
+            // pulled RemoteChanges. Skipping them here (rather than the
+            // previous `require`, which crashed and rolled back the *whole*
+            // pull transaction the moment cursor 0 first pulled any HC row)
+            // is a deliberate, documented gap: those two entity types are
+            // effectively push-only from this client's perspective today.
+            // Reconciling a second device's HC pushes into local HC tables
+            // is real future work, not something to improvise here.
+            response.changes.filter { it.entityType in SyncEntityType.pullable }.sortedWith(
                 compareBy<RemoteChange>({ remoteApplyPriority(it.entityType) }, { it.id }),
             ).forEach { change ->
-                require(change.entityType in SyncEntityType.pullable) {
-                    "Unsupported remote entity type ${change.entityType}"
-                }
                 val hasNewerLocalMutation = dao.getPendingSyncForEntity(change.entityType, change.id).isNotEmpty()
                 if (hasNewerLocalMutation) {
                     updateServerVersion(change.entityType, change.id, change.version)
@@ -351,6 +359,7 @@ class RoomSyncOutboxStore(private val database: FitTrackDatabase) : SyncOutboxSt
                     techniqueIssue = data.getBoolean("technique_issue"),
                     concerningSymptom = data.getBoolean("concerning_symptom"),
                     completedAt = data.nullableString("completed_at")?.isoMillis(),
+                    skipped = data.optBoolean("skipped"),
                     updatedAt = updatedAt,
                     serverVersion = change.version,
                     deletedAt = deletedAt,

@@ -96,6 +96,7 @@ export const ENTITY_TABLES: Record<string, EntityDef> = {
       "technique_issue",
       "concerning_symptom",
       "completed_at",
+      "skipped",
     ],
   },
   // Added by M6's Fitbit -> Health Connect pivot (see

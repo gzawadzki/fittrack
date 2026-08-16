@@ -11,3 +11,4 @@ supabase/.temp/
 
 .claude/
 artifacts/
+node_modules/

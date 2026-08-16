@@ -79,6 +79,7 @@ fun GuidedWorkoutRoute(
         state = state,
         onStartExercise = viewModel::startNextExercise,
         onLogSet = viewModel::logSet,
+        onSkipSet = viewModel::skipSet,
         onFinishExercise = viewModel::finishExercise,
         onSkip = viewModel::skip,
         onLoadSwaps = { viewModel.loadSwaps(availableEquipment) },
@@ -94,6 +95,7 @@ fun GuidedWorkoutScreen(
     state: WorkoutUiState,
     onStartExercise: () -> Unit,
     onLogSet: (String, Int, Double, Int?, Boolean, Boolean, Boolean) -> Unit,
+    onSkipSet: (String) -> Unit,
     onFinishExercise: (String) -> Unit,
     onSkip: (String, String) -> Unit,
     onLoadSwaps: () -> Unit,
@@ -197,7 +199,7 @@ fun GuidedWorkoutScreen(
                     }
                 }
                 item {
-                    SetFlowCard(state.sets, state.busy) { set, reps, weight, rir, pain, technique, symptom ->
+                    SetFlowCard(state.sets, state.busy, onSkip = { set -> onSkipSet(set.id) }) { set, reps, weight, rir, pain, technique, symptom ->
                         onLogSet(set.id, reps, weight, rir, pain, technique, symptom)
                     }
                 }
@@ -326,11 +328,23 @@ private fun WorkoutHeader(workoutId: String, planName: String, startedAt: Long, 
 private fun SetFlowCard(
     sets: List<SetLog>,
     busy: Boolean,
+    onSkip: (SetLog) -> Unit,
     onLog: (SetLog, Int, Double, Int?, Boolean, Boolean, Boolean) -> Unit,
 ) {
     val active = sets.firstOrNull { it.completedAt == null }
     val completed = sets.filter { it.completedAt != null }
     val upcoming = sets.filter { it.completedAt == null }.drop(1)
+    // Sets 2+ carry the weight/reps/RIR you just logged for the previous set of
+    // the same type forward as the pre-fill, instead of always resetting to the
+    // exercise's flat plan target — only the first set of each type (warmup or
+    // working) falls back to that plan target (which itself already tracks your
+    // last session via progression).
+    val carryForward = active?.let { current ->
+        sets.filter {
+            it.planned.type == current.planned.type && it.position < current.position &&
+                it.completedAt != null && it.actualReps != null
+        }.maxByOrNull { it.position }
+    }
 
     Surface(
         modifier = Modifier.fillMaxWidth(),
@@ -340,7 +354,7 @@ private fun SetFlowCard(
     ) {
         Column {
             active?.let { set ->
-                ActiveSetEditor(set, sets.displayLabel(set), busy) { reps, weight, rir, pain, technique, symptom ->
+                ActiveSetEditor(set, carryForward, sets.displayLabel(set), busy, onSkip = { onSkip(set) }) { reps, weight, rir, pain, technique, symptom ->
                     onLog(set, reps, weight, rir, pain, technique, symptom)
                 }
             }
@@ -377,10 +391,17 @@ private fun List<SetLog>.displayLabel(set: SetLog): String {
 }
 
 @Composable
-private fun ActiveSetEditor(set: SetLog, displayLabel: String, busy: Boolean, onLog: (Int, Double, Int?, Boolean, Boolean, Boolean) -> Unit) {
-    var reps by rememberSaveable(set.id, set.completedAt) { mutableStateOf((set.actualReps ?: set.planned.repMin).toString()) }
-    var weight by rememberSaveable(set.id, set.completedAt) { mutableStateOf((set.actualWeightKg ?: set.planned.targetWeightKg).toString()) }
-    var rir by rememberSaveable(set.id, set.completedAt) { mutableStateOf(set.actualRir?.toString() ?: set.planned.targetRir?.toString().orEmpty()) }
+private fun ActiveSetEditor(
+    set: SetLog,
+    carryForward: SetLog?,
+    displayLabel: String,
+    busy: Boolean,
+    onSkip: () -> Unit,
+    onLog: (Int, Double, Int?, Boolean, Boolean, Boolean) -> Unit,
+) {
+    var reps by rememberSaveable(set.id, set.completedAt) { mutableStateOf((set.actualReps ?: carryForward?.actualReps ?: set.planned.repMin).toString()) }
+    var weight by rememberSaveable(set.id, set.completedAt) { mutableStateOf((set.actualWeightKg ?: carryForward?.actualWeightKg ?: set.planned.targetWeightKg).toString()) }
+    var rir by rememberSaveable(set.id, set.completedAt) { mutableStateOf(set.actualRir?.toString() ?: carryForward?.actualRir?.toString() ?: set.planned.targetRir?.toString().orEmpty()) }
     var pain by rememberSaveable(set.id, set.completedAt) { mutableStateOf(set.pain) }
     var technique by rememberSaveable(set.id, set.completedAt) { mutableStateOf(set.techniqueIssue) }
     var symptom by rememberSaveable(set.id, set.completedAt) { mutableStateOf(set.concerningSymptom) }
@@ -421,13 +442,18 @@ private fun ActiveSetEditor(set: SetLog, displayLabel: String, busy: Boolean, on
         if (!valid) {
             Text("Sprawdź ciężar, powtórzenia i RIR.", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
         }
-        Button(
-            onClick = { onLog(parsedReps!!, parsedWeight!!, parsedRir, pain, technique, symptom) },
-            enabled = valid && !busy,
-            modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp),
-        ) {
-            Icon(Icons.Default.Check, null)
-            Text("  Zapisz serię")
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            OutlinedButton(onClick = onSkip, enabled = !busy, modifier = Modifier.weight(1f).heightIn(min = 52.dp)) {
+                Text("Pomiń serię")
+            }
+            Button(
+                onClick = { onLog(parsedReps!!, parsedWeight!!, parsedRir, pain, technique, symptom) },
+                enabled = valid && !busy,
+                modifier = Modifier.weight(2f).heightIn(min = 52.dp),
+            ) {
+                Icon(Icons.Default.Check, null)
+                Text("  Zapisz serię")
+            }
         }
     }
 }
@@ -440,15 +466,28 @@ private fun CompletedSetRow(set: SetLog, displayLabel: String) {
     ) {
         SetBadge(displayLabel, active = false)
         Spacer(Modifier.width(12.dp))
-        Text(
-            "${formatLoad(set.actualWeightKg ?: 0.0)} kg × ${set.actualReps ?: 0}",
-            modifier = Modifier.weight(1f),
-            style = MaterialTheme.typography.titleMedium,
-            color = FitTrackColors.Success,
-        )
-        set.actualRir?.let { Text("RIR $it", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall) }
+        if (set.skipped) {
+            Text(
+                "Pominięta",
+                modifier = Modifier.weight(1f),
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        } else {
+            Text(
+                "${formatLoad(set.actualWeightKg ?: 0.0)} kg × ${set.actualReps ?: 0}",
+                modifier = Modifier.weight(1f),
+                style = MaterialTheme.typography.titleMedium,
+                color = FitTrackColors.Success,
+            )
+            set.actualRir?.let { Text("RIR $it", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall) }
+        }
         Spacer(Modifier.width(8.dp))
-        Icon(Icons.Default.Check, "Ukończona", tint = FitTrackColors.Success)
+        Icon(
+            Icons.Default.Check,
+            if (set.skipped) "Pominięta" else "Ukończona",
+            tint = if (set.skipped) MaterialTheme.colorScheme.onSurfaceVariant else FitTrackColors.Success,
+        )
     }
 }
 

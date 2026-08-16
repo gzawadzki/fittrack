@@ -110,6 +110,19 @@ interface WorkoutRepository {
         concerningSymptom: Boolean,
     ): SetLog
 
+    /** Marks a planned set as deliberately skipped (e.g. not enough strength
+     * left for it) instead of logged with numbers. Counts the same as a
+     * completed set for [finishExercise]'s "every set resolved" gate, but is
+     * excluded from progression like any other null-actualReps set. */
+    suspend fun skipSet(setId: String): SetLog
+
+    /** Clears a previously logged set back to its unlogged planned state —
+     * for correcting a mistaken log entry (wrong tap, duplicate) after the
+     * exercise (and possibly the whole workout) has already finished.
+     * Unlike [completeSet]/[skipSet], this does not require the exercise to
+     * still be ACTIVE. */
+    suspend fun clearLoggedSet(setId: String)
+
     suspend fun finishExercise(exerciseSessionId: String, note: String)
     suspend fun skipExercise(exerciseSessionId: String, reason: String)
     suspend fun swapExercise(exerciseSessionId: String, replacementExerciseId: String)

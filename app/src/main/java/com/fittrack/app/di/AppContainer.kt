@@ -11,6 +11,7 @@ import com.fittrack.core.database.repository.RoomWorkoutRepository
 import com.fittrack.core.database.sync.RoomSyncOutboxStore
 import com.fittrack.core.model.CoachBriefing
 import com.fittrack.core.model.CoachReply
+import com.fittrack.core.model.repository.CoachBriefingCache
 import com.fittrack.core.model.repository.CoachGateway
 import com.fittrack.core.model.repository.HealthRepository
 import com.fittrack.core.model.repository.FitbitDataRepository
@@ -90,6 +91,8 @@ class AppContainer(private val application: Application) {
         .takeIf { it.isValidHttpsBaseUrl() && BuildConfig.SUPABASE_ANON_KEY.isNotBlank() }
         ?.let { SupabaseCoachGateway("${it.trimEnd('/')}/functions/v1", authRepository) }
         ?: UnavailableCoachGateway
+
+    val coachBriefingCache: CoachBriefingCache = SharedPrefsCoachBriefingCache(application)
 
     /** On-device Health Connect reader (see docs/adr/0001-fitbit-health-connect-pivot.md).
      * Replaces the old server-side Fitbit OAuth gateway - no client secret,

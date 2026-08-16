@@ -99,7 +99,18 @@ private fun SignedInSettings(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                OutlinedButton(onClick = onSyncNow, modifier = Modifier.fillMaxWidth()) { Text("Synchronizuj teraz") }
+                OutlinedButton(
+                    onClick = onSyncNow,
+                    enabled = state.dataSyncState != DataSyncState.SYNCING,
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text(if (state.dataSyncState == DataSyncState.SYNCING) "Synchronizowanie…" else "Synchronizuj teraz") }
+                dataSyncLabel(state.dataSyncState)?.let {
+                    Text(
+                        it,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (state.dataSyncState == DataSyncState.ERROR) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
         }
         HealthConnectCard(state, onGrantHealthConnectPermissions, onSyncHealthConnect)
         Text("Dane zdrowotne pochodzą z Health Connect i są odczytywane wyłącznie na urządzeniu.", style = MaterialTheme.typography.bodySmall)
@@ -130,6 +141,13 @@ private fun HealthConnectCard(state: SettingsUiState, onGrantPermissions: () -> 
                 ) { Text(if (state.healthConnectSyncState == HealthConnectSyncState.SYNCING) "Synchronizowanie…" else "Synchronizuj teraz") }
             }
     }
+}
+
+private fun dataSyncLabel(state: DataSyncState): String? = when (state) {
+    DataSyncState.IDLE -> null
+    DataSyncState.SYNCING -> null
+    DataSyncState.SYNCED -> "Zsynchronizowano."
+    DataSyncState.ERROR -> "Synchronizacja nie powiodła się. Sprawdź połączenie i spróbuj ponownie."
 }
 
 private fun healthConnectStatusLabel(state: HealthConnectState) = when (state) {

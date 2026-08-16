@@ -14,3 +14,12 @@ interface CoachGateway {
     suspend fun sendMessage(message: String): CoachReply
     suspend fun getDebrief(workoutSessionId: String): CoachReply
 }
+
+/** Local cache of the last-fetched briefing, so the Trener tab can show
+ * something immediately on open instead of a blank loading state while a
+ * fresh one generates - coach model calls can take seconds to tens of
+ * seconds, and re-fetching with nothing to show made the tab feel hung. */
+interface CoachBriefingCache {
+    fun read(): CoachBriefing?
+    fun write(briefing: CoachBriefing)
+}

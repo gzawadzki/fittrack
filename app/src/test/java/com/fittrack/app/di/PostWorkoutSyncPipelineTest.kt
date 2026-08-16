@@ -13,6 +13,7 @@ import com.fittrack.core.model.WorkoutSession
 import com.fittrack.core.model.WorkoutStatus
 import com.fittrack.core.model.repository.FitbitDataRepository
 import com.fittrack.core.model.repository.WorkoutRepository
+import com.fittrack.core.network.ExerciseHrAggregate
 import com.fittrack.core.network.ExerciseTimeRange
 import com.fittrack.core.network.HealthConnectDailyMetric
 import com.fittrack.core.network.HealthConnectGateway
@@ -109,6 +110,11 @@ class PostWorkoutSyncPipelineTest {
     @Test
     fun `retryable push failure is retried`() = runTest {
         val pipeline = pipeline(
+            // A push failure can only surface if there's something to push - an
+            // empty aggregates list short-circuits HealthConnectSyncGateway.push()
+            // to Success before it ever reaches syncClient, silently skipping the
+            // RecordingSyncClient's configured Failure below.
+            healthConnectGateway = FakeHealthConnectGateway(workoutHeartRateOutcome = okWithOneAggregate()),
             healthConnectSyncGateway = HealthConnectSyncGateway(
                 syncClient = RecordingSyncClient(
                     SyncResult.Failure(NetworkError("OFFLINE", "no network", retryable = true)),
@@ -122,6 +128,7 @@ class PostWorkoutSyncPipelineTest {
     @Test
     fun `non-retryable push failure - eg Supabase never configured - is a permanent failure, not an endless retry`() = runTest {
         val pipeline = pipeline(
+            healthConnectGateway = FakeHealthConnectGateway(workoutHeartRateOutcome = okWithOneAggregate()),
             healthConnectSyncGateway = HealthConnectSyncGateway(
                 syncClient = RecordingSyncClient(
                     SyncResult.Failure(NetworkError("SYNC_NOT_CONFIGURED", "not configured", retryable = false)),
@@ -131,6 +138,13 @@ class PostWorkoutSyncPipelineTest {
 
         assertEquals(PostWorkoutSyncOutcome.PERMANENT_FAILURE, pipeline.sync(workoutId))
     }
+
+    private fun okWithOneAggregate() = HealthConnectReadOutcome.Ok(
+        WorkoutHeartRateReadResult(
+            samples = emptyList(),
+            aggregates = listOf(ExerciseHrAggregate("exercise-1", avgBpm = 120.0, maxBpm = 150, recoveryDeltaBpm = 20, sampleCount = 10)),
+        ),
+    )
 
     @Test
     fun `exception while persisting is retried`() = runTest {
@@ -174,6 +188,8 @@ class PostWorkoutSyncPipelineTest {
         override suspend fun startWorkout(planId: String) = throw UnsupportedOperationException()
         override suspend fun startExercise(exerciseSessionId: String) = throw UnsupportedOperationException()
         override suspend fun completeSet(setId: String, reps: Int, weightKg: Double, rir: Int?, pain: Boolean, techniqueIssue: Boolean, concerningSymptom: Boolean) = throw UnsupportedOperationException()
+        override suspend fun skipSet(setId: String) = throw UnsupportedOperationException()
+        override suspend fun clearLoggedSet(setId: String) = throw UnsupportedOperationException()
         override suspend fun finishExercise(exerciseSessionId: String, note: String) = throw UnsupportedOperationException()
         override suspend fun skipExercise(exerciseSessionId: String, reason: String) = throw UnsupportedOperationException()
         override suspend fun swapExercise(exerciseSessionId: String, replacementExerciseId: String) = throw UnsupportedOperationException()

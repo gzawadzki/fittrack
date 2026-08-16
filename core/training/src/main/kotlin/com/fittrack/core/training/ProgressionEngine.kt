@@ -56,7 +56,7 @@ data class ProgressionRecommendation(
 object ProgressionEngine {
     fun recommend(input: ProgressionInput): ProgressionRecommendation {
         val workingSets = input.sets.filterNot { it.isWarmup }
-        if (workingSets.isEmpty()) return hold(input, "NO_WORKING_SETS", "No completed working sets.")
+        if (workingSets.isEmpty()) return hold(input, "NO_WORKING_SETS", "Brak ukończonych serii roboczych.")
 
         // Safety first: pain/concerning symptoms always block progression outright.
         // The app never diagnoses the cause — it only stops and asks the user to review.
@@ -65,12 +65,12 @@ object ProgressionEngine {
                 ProgressionAction.STOP_AND_REVIEW,
                 input.currentWeightKg,
                 reasonCode = "PAIN_OR_SYMPTOM",
-                explanation = "Pain or a concerning symptom blocks progression. Stop and review the situation; the app does not diagnose.",
+                explanation = "Ból lub niepokojący objaw blokuje progresję. Zatrzymaj się i oceń sytuację; aplikacja nie stawia diagnoz.",
             )
         }
 
         if (workingSets.any { it.techniqueIssue }) {
-            return hold(input, "TECHNIQUE_ISSUE", "Stabilize technique at the current weight before progressing.")
+            return hold(input, "TECHNIQUE_ISSUE", "Najpierw ustabilizuj technikę przy obecnym ciężarze.")
         }
 
         val belowMinimum = workingSets.any { it.reps < input.repMin }
@@ -80,10 +80,10 @@ object ProgressionEngine {
                     ProgressionAction.DECREASE_LOAD,
                     max(0.0, input.currentWeightKg - input.incrementKg),
                     reasonCode = "TWO_CONSECUTIVE_MISSES",
-                    explanation = "The target was missed in two consecutive sessions; one increment lower is proposed.",
+                    explanation = "Cel nieosiągnięty w dwóch kolejnych sesjach; proponowany jeden krok w dół.",
                 )
             } else {
-                hold(input, "FIRST_MISS", "First result below range — hold weight and watch the next session.")
+                hold(input, "FIRST_MISS", "Pierwszy wynik poniżej zakresu — utrzymaj ciężar i obserwuj kolejną sesję.")
             }
         }
 
@@ -99,19 +99,19 @@ object ProgressionEngine {
                     input.currentWeightKg,
                     proposedSetDelta = -1,
                     reasonCode = "RED_READINESS",
-                    explanation = "Sleep and resting heart rate both deviate from baseline; one fewer set is proposed instead of a load increase.",
+                    explanation = "Sen i tętno spoczynkowe odbiegają od wartości bazowych; zamiast zwiększać ciężar, proponowana jedna seria mniej.",
                 )
-                ReadinessLevel.YELLOW -> hold(input, "YELLOW_READINESS", "One recovery signal deviates from baseline; hold the weight increase.")
+                ReadinessLevel.YELLOW -> hold(input, "YELLOW_READINESS", "Jeden sygnał regeneracji odbiega od normy; wstrzymaj zwiększanie ciężaru.")
                 else -> ProgressionRecommendation(
                     ProgressionAction.INCREASE_LOAD,
                     input.currentWeightKg + input.incrementKg,
                     reasonCode = "TOP_RANGE_REACHED",
-                    explanation = "All sets reached the top of the rep range with the required RIR buffer; one increment up is proposed.",
+                    explanation = "Wszystkie serie osiągnęły górny zakres powtórzeń z wymaganym zapasem RIR; proponowany jeden krok w górę.",
                 )
             }
         }
 
-        return hold(input, "PROGRESS_REPS", "Hold the weight and work up through the rep range first.")
+        return hold(input, "PROGRESS_REPS", "Utrzymaj ciężar i najpierw zbuduj liczbę powtórzeń w docelowym zakresie.")
     }
 
     private fun hold(input: ProgressionInput, code: String, message: String) = ProgressionRecommendation(

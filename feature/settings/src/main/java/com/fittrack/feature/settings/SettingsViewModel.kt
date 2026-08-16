@@ -233,6 +233,20 @@ class SettingsViewModel(
         }
     }
 
+    /** Called by the UI right before it enqueues a manual data sync, so the
+     * "Synchronizuj teraz" button shows immediate feedback instead of looking
+     * like a no-op until the WorkManager request finishes. */
+    fun onDataSyncStarted() {
+        if (_state.value.dataSyncState == DataSyncState.SYNCING) return
+        _state.update { it.copy(dataSyncState = DataSyncState.SYNCING) }
+    }
+
+    /** Called by the UI once [com.fittrack.core.network.NetworkWorkScheduler.enqueueImmediateSyncAndAwait]
+     * resolves. */
+    fun onDataSyncFinished(succeeded: Boolean) {
+        _state.update { it.copy(dataSyncState = if (succeeded) DataSyncState.SYNCED else DataSyncState.ERROR) }
+    }
+
     private fun loadSession() {
         _state.update {
             it.copy(

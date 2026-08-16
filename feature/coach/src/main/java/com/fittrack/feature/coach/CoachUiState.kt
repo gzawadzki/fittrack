@@ -12,6 +12,10 @@ data class CoachUiState(
     val briefing: CoachBriefing? = null,
     val conversation: List<CoachMessage> = emptyList(),
     val pending: List<CoachSuggestion> = emptyList(),
+    /** [CoachSuggestion.targetId] (a plan exercise id) resolved to its exercise
+     * name, so the UI never has to show a raw UUID. Missing entries fall back
+     * to the id itself. */
+    val targetNames: Map<String, String> = emptyMap(),
     val decidingSuggestionIds: Set<String> = emptySet(),
     val messageDraft: String = "",
 )

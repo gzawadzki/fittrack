@@ -213,7 +213,14 @@ private fun MainNavigation(
             composable(MainDestination.COACH.route) {
                 val coach: CoachViewModel = viewModel(
                     factory = viewModelFactory {
-                        initializer { CoachViewModel(container.workoutRepository, container.planRepository, container.coachGateway) }
+                        initializer {
+                            CoachViewModel(
+                                container.workoutRepository,
+                                container.planRepository,
+                                container.coachGateway,
+                                container.coachBriefingCache,
+                            )
+                        }
                     },
                 )
                 CoachRoute(coach)

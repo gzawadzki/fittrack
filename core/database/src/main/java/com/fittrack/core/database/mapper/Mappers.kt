@@ -197,6 +197,7 @@ fun SetLogEntity.toDomain(): SetLog = SetLog(
     techniqueIssue = techniqueIssue,
     concerningSymptom = concerningSymptom,
     completedAt = completedAt?.let(Instant::ofEpochMilli),
+    skipped = skipped,
 )
 
 fun SetLog.toEntity(updatedAt: Long): SetLogEntity = SetLogEntity(
@@ -215,6 +216,7 @@ fun SetLog.toEntity(updatedAt: Long): SetLogEntity = SetLogEntity(
     techniqueIssue = techniqueIssue,
     concerningSymptom = concerningSymptom,
     completedAt = completedAt?.toEpochMilli(),
+    skipped = skipped,
     updatedAt = updatedAt,
 )
 

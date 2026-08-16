@@ -282,7 +282,31 @@ Deno.serve(async (req: Request) => {
       applied_version: number;
     }[] = [];
 
-    for (const op of toApply) {
+    // Apply in parent-before-child order: a CREATE batch can contain a new
+    // exercise_sessions row and its set_logs children together, and if the
+    // child were applied first it would violate set_logs' FK on
+    // exercise_session_id (observed in production - see postgres_logs
+    // "violates foreign key constraint set_logs_exercise_session_id_fkey").
+    // `toApply`'s own order stays untouched for phase 1 validation above;
+    // only the apply order below is normalized. Array.prototype.sort is
+    // stable, so operations within the same entity type keep their relative
+    // order (e.g. multiple set_logs CREATEs for one exercise session).
+    const APPLY_PRIORITY: Record<string, number> = {
+      user_profiles: 0,
+      exercises: 0,
+      workout_plans: 0,
+      plan_exercises: 10,
+      workout_sessions: 20,
+      exercise_sessions: 30,
+      set_logs: 40,
+      fitbit_daily_metrics: 40,
+      fitbit_hr_exercise_aggregates: 40,
+    };
+    const orderedToApply = [...toApply].sort(
+      (a, b) => (APPLY_PRIORITY[a.entityType] ?? 999) - (APPLY_PRIORITY[b.entityType] ?? 999),
+    );
+
+    for (const op of orderedToApply) {
       const table = ENTITY_TABLES[op.entityType].table;
       let resultVersion: number;
 
@@ -297,6 +321,22 @@ Deno.serve(async (req: Request) => {
           if (op.entityType === "workout_sessions" && error.code === "23505") {
             return versionConflict(
               `operation ${op.operationId}: another ACTIVE workout was created concurrently`,
+            );
+          }
+          // user_profiles has a UNIQUE(user_id) constraint (one profile per
+          // user) in addition to its primary key. A client whose local
+          // profile row was lost (reinstall, new device) re-onboards with a
+          // freshly generated id that will never match the existing row's
+          // id, so upsert(onConflict: "id") always misses and falls through
+          // to an INSERT that then violates UNIQUE(user_id) instead -
+          // structurally guaranteed to recur, not a transient race like the
+          // workout_sessions case above. Surfacing it as a version conflict
+          // (rather than the same throw -> 500 every retry) lets the client
+          // fall back to a changes-only pull and reconcile against the
+          // existing profile row instead of getting permanently stuck.
+          if (op.entityType === "user_profiles" && error.code === "23505") {
+            return versionConflict(
+              `operation ${op.operationId}: a profile already exists for this user; pull latest changes and retry`,
             );
           }
           throw error;
@@ -418,7 +458,16 @@ Deno.serve(async (req: Request) => {
 
     return jsonResponse(responseBody);
   } catch (err) {
-    console.error("sync-batch failed", err instanceof Error ? err.message : String(err));
+    const detail = err instanceof Error
+      ? err.message
+      : (() => {
+        try {
+          return JSON.stringify(err);
+        } catch {
+          return String(err);
+        }
+      })();
+    console.error("sync-batch failed", detail);
     return internalError();
   }
 });

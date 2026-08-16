@@ -38,7 +38,7 @@ import com.fittrack.core.database.entity.WorkoutSessionEntity
         SyncOutboxEntity::class,
         SyncStateEntity::class,
     ],
-    version = 2,
+    version = 3,
     exportSchema = true,
 )
 abstract class FitTrackDatabase : RoomDatabase() {
@@ -56,7 +56,7 @@ abstract class FitTrackDatabase : RoomDatabase() {
                 context.applicationContext,
                 FitTrackDatabase::class.java,
                 DB_NAME,
-            ).addMigrations(MIGRATION_1_2).build().also { instance = it }
+            ).addMigrations(MIGRATION_1_2, MIGRATION_2_3).build().also { instance = it }
         }
 
         /** For tests: build an isolated in-memory instance instead of the singleton. */
@@ -104,6 +104,12 @@ abstract class FitTrackDatabase : RoomDatabase() {
                     "INSERT OR IGNORE INTO sync_state(singletonId, cursor, activeBatchId, blockedReason) " +
                         "VALUES (1, 0, NULL, NULL)",
                 )
+            }
+        }
+
+        val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE set_logs ADD COLUMN skipped INTEGER NOT NULL DEFAULT 0")
             }
         }
     }

@@ -5,36 +5,53 @@ import androidx.lifecycle.viewModelScope
 import com.fittrack.core.model.CoachMessage
 import com.fittrack.core.model.CoachMessageRole
 import com.fittrack.core.model.CoachReply
+import com.fittrack.core.model.repository.CoachBriefingCache
 import com.fittrack.core.model.repository.CoachGateway
 import com.fittrack.core.model.repository.PlanRepository
 import com.fittrack.core.model.repository.WorkoutRepository
 import java.time.Instant
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.mapLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
+@OptIn(ExperimentalCoroutinesApi::class)
 class CoachViewModel(
     private val workoutRepository: WorkoutRepository,
     private val planRepository: PlanRepository,
     private val coachGateway: CoachGateway,
+    private val briefingCache: CoachBriefingCache,
 ) : ViewModel() {
-    private val local = MutableStateFlow(CoachUiState())
+    // Coach model calls take seconds to tens of seconds (LLM generation).
+    // Starting from the last cached briefing instead of null means the tab
+    // shows something immediately instead of a blank loading state on every
+    // single visit while refreshBriefing() fetches a fresh one in the background.
+    private val cachedBriefing = briefingCache.read()
+    private val local = MutableStateFlow(CoachUiState(briefing = cachedBriefing, isLoading = cachedBriefing == null))
 
     val state = combine(
         local,
         workoutRepository.observePendingSuggestions(),
-    ) { current, pending ->
-        current.copy(pending = pending)
-    }.stateIn(
-        scope = viewModelScope,
-        started = SharingStarted.WhileSubscribed(5_000),
-        initialValue = CoachUiState(),
-    )
+    ) { current, pending -> current to pending }
+        .mapLatest { (current, pending) ->
+            val targetNames = pending.associate { suggestion ->
+                val name = runCatching { planRepository.getPlanExercise(suggestion.targetId)?.exerciseName }
+                    .getOrNull()
+                suggestion.targetId to (name ?: suggestion.targetId)
+            }
+            current.copy(pending = pending, targetNames = targetNames)
+        }
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5_000),
+            initialValue = CoachUiState(briefing = cachedBriefing, isLoading = cachedBriefing == null),
+        )
 
     init {
         refreshBriefing()
@@ -60,6 +77,7 @@ class CoachViewModel(
             }
             try {
                 val briefing = coachGateway.getBriefing()
+                briefingCache.write(briefing)
                 local.update {
                     it.copy(
                         isLoading = false,

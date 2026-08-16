@@ -39,6 +39,8 @@ import com.fittrack.core.model.Citation
 import com.fittrack.core.model.CoachMessage
 import com.fittrack.core.model.CoachMessageRole
 import com.fittrack.core.model.CoachSuggestion
+import com.fittrack.core.model.Confidence
+import com.fittrack.core.model.SuggestionType
 import java.net.URI
 
 @Composable
@@ -152,6 +154,7 @@ private fun CoachContent(
             items(state.pending, key = { it.id }) { suggestion ->
                 SuggestionCard(
                     item = suggestion,
+                    targetName = state.targetNames[suggestion.targetId] ?: suggestion.targetId,
                     deciding = suggestion.id in state.decidingSuggestionIds,
                     onAccept = onAccept,
                     onReject = onReject,
@@ -196,6 +199,7 @@ private fun BriefingCard(
 @Composable
 private fun SuggestionCard(
     item: CoachSuggestion,
+    targetName: String,
     deciding: Boolean,
     onAccept: (String) -> Unit,
     onReject: (String, String?) -> Unit,
@@ -204,14 +208,14 @@ private fun SuggestionCard(
     var askReason by rememberSaveable(item.id) { mutableStateOf(false) }
     var reason by rememberSaveable(item.id) { mutableStateOf("") }
     FitTrackCard(Modifier.fillMaxWidth()) {
-            Text(item.type.name, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.secondary)
-            Text("Cel: ${item.targetId}", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            Text(item.type.toPolishLabel(), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.secondary)
+            Text(targetName, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
             Text("${item.before} → ${item.after}", style = MaterialTheme.typography.headlineSmall)
             Text(item.explanation)
             if (item.signals.isNotEmpty()) {
                 Text("Sygnały: ${item.signals.joinToString()}", style = MaterialTheme.typography.bodySmall)
             }
-            Text("Pewność: ${item.confidence.name}", style = MaterialTheme.typography.bodySmall)
+            Text("Pewność: ${item.confidence.toPolishLabel()}", style = MaterialTheme.typography.bodySmall)
             CitationList(item.citations, onOpenCitation)
             if (askReason) {
                 OutlinedTextField(
@@ -295,6 +299,20 @@ private fun ChatComposer(
         Button(onClick = onSend, enabled = enabled && value.isNotBlank()) { Text("Wyślij") }
       }
     }
+}
+
+private fun SuggestionType.toPolishLabel(): String = when (this) {
+    SuggestionType.LOAD -> "Ciężar"
+    SuggestionType.VOLUME -> "Objętość"
+    SuggestionType.SWAP -> "Zamiana ćwiczenia"
+    SuggestionType.RESCHEDULE -> "Zmiana terminu"
+    SuggestionType.HOLD -> "Bez zmian"
+}
+
+private fun Confidence.toPolishLabel(): String = when (this) {
+    Confidence.LOW -> "Niska"
+    Confidence.MEDIUM -> "Średnia"
+    Confidence.HIGH -> "Wysoka"
 }
 
 internal fun String.isSafeHttpsUrl(): Boolean = runCatching {

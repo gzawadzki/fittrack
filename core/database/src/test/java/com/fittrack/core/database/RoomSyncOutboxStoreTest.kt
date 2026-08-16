@@ -55,7 +55,7 @@ class RoomSyncOutboxStoreTest {
             val migrated = Room.databaseBuilder(context, FitTrackDatabase::class.java, name)
                 .allowMainThreadQueries()
                 .setJournalMode(RoomDatabase.JournalMode.TRUNCATE)
-                .addMigrations(FitTrackDatabase.MIGRATION_1_2)
+                .addMigrations(FitTrackDatabase.MIGRATION_1_2, FitTrackDatabase.MIGRATION_2_3)
                 .build()
             try {
                 assertEquals("Siła", migrated.dao().getProfile()?.goal)

@@ -48,6 +48,8 @@ class WorkoutViewModel(
         action { workouts.completeSet(setId, reps, weight, rir, pain, technique, symptom) }
     }
 
+    fun skipSet(setId: String) = action { workouts.skipSet(setId) }
+
     fun finishExercise(note: String) {
         val current = state.value.currentExercise ?: return
         if (state.value.sets.any { it.completedAt == null }) { _state.update { it.copy(error = "Ukończ wszystkie serie albo pomiń ćwiczenie") }; return }

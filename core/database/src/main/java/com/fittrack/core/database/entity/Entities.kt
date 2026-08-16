@@ -152,6 +152,7 @@ data class SetLogEntity(
     val techniqueIssue: Boolean = false,
     val concerningSymptom: Boolean = false,
     val completedAt: Long? = null,
+    val skipped: Boolean = false,
     val updatedAt: Long,
     val serverVersion: Int? = null,
     val deletedAt: Long? = null,

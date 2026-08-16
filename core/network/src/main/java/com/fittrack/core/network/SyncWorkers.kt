@@ -9,10 +9,13 @@ import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.OutOfQuotaPolicy
 import androidx.work.PeriodicWorkRequestBuilder
+import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import androidx.work.WorkRequest
 import androidx.work.WorkerParameters
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.mapNotNull
 
 /** Installed by app DI before a [SyncWorker] can execute. */
 object NetworkWorkDependencies {
@@ -32,6 +35,9 @@ class SyncWorker(appContext: Context, params: WorkerParameters) : CoroutineWorke
         }
     }
 }
+
+/** Terminal outcome of a manual "sync now" trigger, for UI feedback. */
+enum class SyncTriggerOutcome { SUCCEEDED, FAILED }
 
 class HeartRateRetentionWorker(appContext: Context, params: WorkerParameters) : CoroutineWorker(appContext, params) {
     override suspend fun doWork(): Result {
@@ -59,13 +65,37 @@ object NetworkWorkScheduler {
         WorkManager.getInstance(context).enqueueUniquePeriodicWork(HR_RETENTION, ExistingPeriodicWorkPolicy.KEEP, cleanup)
     }
 
-    /** Call immediately after a workout ends. Network constraint keeps offline logging non-blocking. */
+    /** Call immediately after a workout ends, or when the user explicitly asks to sync now.
+     * REPLACE (not KEEP): a manual "sync now" tap should always get a fresh attempt rather
+     * than silently no-op against an already-enqueued request that's sitting in exponential
+     * backoff from an earlier failure - KEEP made that button do nothing for up to an hour
+     * after a few failed attempts. Network constraint keeps offline logging non-blocking. */
     fun enqueueImmediateSync(context: Context) {
         val request = OneTimeWorkRequestBuilder<SyncWorker>()
             .setConstraints(androidx.work.Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
             .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
             .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, WorkRequest.MIN_BACKOFF_MILLIS, TimeUnit.MILLISECONDS)
             .build()
-        WorkManager.getInstance(context).enqueueUniqueWork(IMMEDIATE_SYNC, ExistingWorkPolicy.KEEP, request)
+        WorkManager.getInstance(context).enqueueUniqueWork(IMMEDIATE_SYNC, ExistingWorkPolicy.REPLACE, request)
+    }
+
+    /** Same as [enqueueImmediateSync], but suspends until the request reaches a
+     * terminal state so the UI (Settings' "Synchronizuj teraz" button) can show
+     * success/failure feedback instead of leaving the tap looking like a no-op.
+     * Observes the request by its own id rather than the [IMMEDIATE_SYNC] unique
+     * work name - REPLACE briefly surfaces the *previous* request's CANCELLED
+     * state on that name, which would otherwise be misread as this attempt failing. */
+    suspend fun enqueueImmediateSyncAndAwait(context: Context): SyncTriggerOutcome {
+        val request = OneTimeWorkRequestBuilder<SyncWorker>()
+            .setConstraints(androidx.work.Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
+            .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
+            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, WorkRequest.MIN_BACKOFF_MILLIS, TimeUnit.MILLISECONDS)
+            .build()
+        val workManager = WorkManager.getInstance(context)
+        workManager.enqueueUniqueWork(IMMEDIATE_SYNC, ExistingWorkPolicy.REPLACE, request)
+        val terminalState = workManager.getWorkInfoByIdFlow(request.id)
+            .mapNotNull { it?.state }
+            .first { it == WorkInfo.State.SUCCEEDED || it == WorkInfo.State.FAILED || it == WorkInfo.State.CANCELLED }
+        return if (terminalState == WorkInfo.State.SUCCEEDED) SyncTriggerOutcome.SUCCEEDED else SyncTriggerOutcome.FAILED
     }
 }

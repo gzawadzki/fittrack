@@ -1,5 +1,6 @@
 package com.fittrack.app.di
 
+import com.fittrack.core.model.FitbitDataPayload
 import com.fittrack.core.model.FitbitSyncStatus
 import com.fittrack.core.model.repository.FitbitDataRepository
 import com.fittrack.core.model.repository.WorkoutRepository
@@ -50,7 +51,7 @@ class PostWorkoutSyncPipeline(
         } catch (e: Exception) {
             false
         }
-        if (!permitted) return PostWorkoutSyncOutcome.PERMANENT_FAILURE
+        if (!permitted) return markFailed(workoutId)
 
         val workout = workoutRepository.getWorkout(workoutId) ?: return PostWorkoutSyncOutcome.PERMANENT_FAILURE
         val endedAt = workout.endedAt ?: return PostWorkoutSyncOutcome.RETRY
@@ -71,7 +72,7 @@ class PostWorkoutSyncPipeline(
             is HealthConnectReadOutcome.Ok -> outcome.data
             is HealthConnectReadOutcome.PartiallyFailed -> outcome.data
             is HealthConnectReadOutcome.Failed ->
-                return if (outcome.error.retryable) PostWorkoutSyncOutcome.RETRY else PostWorkoutSyncOutcome.PERMANENT_FAILURE
+                return if (outcome.error.retryable) PostWorkoutSyncOutcome.RETRY else markFailed(workoutId)
         }
 
         return try {
@@ -86,10 +87,23 @@ class PostWorkoutSyncPipeline(
             when (val pushResult = healthConnectSyncGateway.pushWorkoutAggregates(workoutId, readResult.aggregates)) {
                 is SyncResult.Success -> PostWorkoutSyncOutcome.SYNCED
                 is SyncResult.Failure ->
-                    if (pushResult.error.retryable) PostWorkoutSyncOutcome.RETRY else PostWorkoutSyncOutcome.PERMANENT_FAILURE
+                    if (pushResult.error.retryable) PostWorkoutSyncOutcome.RETRY else markFailed(workoutId)
             }
         } catch (e: Exception) {
             PostWorkoutSyncOutcome.RETRY
         }
+    }
+
+    /** A terminal (non-retryable) failure otherwise leaves the workout stuck
+     * showing "Oczekuje na Fitbit" forever, since [fitbitSyncStatus] is only
+     * ever set to PENDING at [com.fittrack.core.model.repository.WorkoutRepository.finishWorkout]
+     * time and nothing else updates it once WorkManager stops retrying. */
+    private suspend fun markFailed(workoutId: String): PostWorkoutSyncOutcome {
+        runCatching {
+            fitbitDataRepository.persist(
+                FitbitDataPayload(workoutSessionId = workoutId, workoutSyncStatus = FitbitSyncStatus.FAILED, syncedAt = Instant.now()),
+            )
+        }
+        return PostWorkoutSyncOutcome.PERMANENT_FAILURE
     }
 }

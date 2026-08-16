@@ -120,6 +120,7 @@ internal fun SetLogEntity.syncData(): String = JSONObject()
     .put("technique_issue", techniqueIssue)
     .put("concerning_symptom", concerningSymptom)
     .putNullable("completed_at", completedAt?.iso())
+    .put("skipped", skipped)
     .toString()
 
 internal fun JSONObject.putNullable(name: String, value: Any?): JSONObject =

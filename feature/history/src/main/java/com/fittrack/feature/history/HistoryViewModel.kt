@@ -143,7 +143,7 @@ internal suspend fun WorkoutRepository.mapHistory(
     var totalVolumeKg = 0.0
     val exercises = exerciseSessions.map { exercise ->
         val sets = getSetLogs(exercise.id).sortedBy(SetLog::position)
-        val completed = sets.filter { it.completedAt != null }
+        val completed = sets.filter { it.completedAt != null && !it.skipped }
         completedSetCount += completed.size
         totalVolumeKg += completed.sumOf { (it.actualWeightKg ?: 0.0) * (it.actualReps ?: 0) }
         exercise.toHistoryItem(sets, heartRateSummaries[exercise.id])
@@ -167,7 +167,7 @@ private fun ExerciseSession.toHistoryItem(
     sets: List<SetLog>,
     heartRateSummary: ExerciseHeartRateSummary?,
 ): ExerciseHistoryItem {
-    val completed = sets.filter { it.completedAt != null }
+    val completed = sets.filter { it.completedAt != null && !it.skipped }
     val volume = completed.sumOf { (it.actualWeightKg ?: 0.0) * (it.actualReps ?: 0) }
     val best = completed.maxByOrNull { (it.actualWeightKg ?: 0.0) * (1.0 + (it.actualReps ?: 0) / 30.0) }
     return ExerciseHistoryItem(

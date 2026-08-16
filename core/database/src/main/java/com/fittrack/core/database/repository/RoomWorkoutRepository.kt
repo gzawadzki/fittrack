@@ -203,6 +203,41 @@ class RoomWorkoutRepository(private val database: FitTrackDatabase) : WorkoutRep
         updated.toDomain()
     }
 
+    override suspend fun skipSet(setId: String): SetLog = database.withTransaction {
+        val existing = requireNotNull(dao.getSetLog(setId)) { "Set $setId does not exist" }
+        val exercise = requireNotNull(dao.getExerciseSession(existing.exerciseSessionId)) { "Exercise session does not exist" }
+        require(exercise.status == "ACTIVE") { "Sets can only be skipped for the active exercise" }
+        val workout = requireNotNull(dao.getWorkout(exercise.workoutSessionId)) { "Workout does not exist" }
+        require(workout.status == "ACTIVE") { "Sets can only be skipped in the active workout" }
+        if (existing.completedAt != null) {
+            require(existing.skipped) { "Completed set cannot be overwritten" }
+            return@withTransaction existing.toDomain()
+        }
+        val now = now()
+        val updated = existing.copy(skipped = true, completedAt = now, updatedAt = now)
+        dao.updateSetLog(updated)
+        outbox.upsert(SyncEntityType.SET_LOGS, updated.id, updated.serverVersion, updated.syncData(), now)
+        updated.toDomain()
+    }
+
+    override suspend fun clearLoggedSet(setId: String) = database.withTransaction {
+        val existing = requireNotNull(dao.getSetLog(setId)) { "Set $setId does not exist" }
+        val now = now()
+        val cleared = existing.copy(
+            actualReps = null,
+            actualWeightKg = null,
+            actualRir = null,
+            pain = false,
+            techniqueIssue = false,
+            concerningSymptom = false,
+            completedAt = null,
+            skipped = false,
+            updatedAt = now,
+        )
+        dao.updateSetLog(cleared)
+        outbox.upsert(SyncEntityType.SET_LOGS, cleared.id, cleared.serverVersion, cleared.syncData(), now)
+    }
+
     override suspend fun finishExercise(exerciseSessionId: String, note: String) = database.withTransaction {
         val current = requireNotNull(dao.getExerciseSession(exerciseSessionId))
         require(current.status == "ACTIVE") { "Only the active exercise can be finished" }
@@ -273,6 +308,23 @@ class RoomWorkoutRepository(private val database: FitTrackDatabase) : WorkoutRep
         val existing = requireNotNull(dao.getWorkout(workoutId)) { "Workout $workoutId does not exist" }
         require(existing.status == "COMPLETED") { "Only a completed workout can be deleted from history" }
         val now = now()
+        // Every descendant needs its own outbox entry deleted/abandoned AND to be
+        // tombstoned locally, not just the workout's. Outbox cleanup alone isn't
+        // enough: bootstrapUnsyncedRows() re-queries "serverVersion IS NULL AND
+        // deletedAt IS NULL" on every prepareBatch() and would silently resurrect
+        // an untombstoned child right back into the outbox. Without both, a
+        // never-synced workout's exercise_sessions/set_logs end up as orphaned
+        // CREATEs referencing a workout_session_id whose own CREATE was abandoned,
+        // permanently failing every future batch they're bundled into with a
+        // foreign key violation instead of just this one deleted workout's data.
+        dao.getExerciseSessions(workoutId).forEach { exercise ->
+            dao.getSetLogs(exercise.id).forEach { set ->
+                outbox.delete(SyncEntityType.SET_LOGS, set.id, set.serverVersion, now)
+                dao.updateSetLog(set.copy(deletedAt = now, updatedAt = now))
+            }
+            outbox.delete(SyncEntityType.EXERCISE_SESSIONS, exercise.id, exercise.serverVersion, now)
+            dao.updateExerciseSession(exercise.copy(deletedAt = now, updatedAt = now))
+        }
         dao.tombstoneWorkout(workoutId, now)
         outbox.delete(SyncEntityType.WORKOUT_SESSIONS, workoutId, existing.serverVersion, now)
     }
