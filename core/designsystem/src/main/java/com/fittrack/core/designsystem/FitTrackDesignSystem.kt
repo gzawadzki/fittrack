@@ -24,6 +24,7 @@ import androidx.compose.material3.Shapes
 import androidx.compose.material3.Surface
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
@@ -34,6 +35,10 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.Font
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontVariation
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.dp
@@ -74,6 +79,58 @@ object FitTrackPalette {
     val ReadinessNeutral = Color(0xFF46515A)
 }
 
+/**
+ * Type system: a technical grotesk for anything that leads (headlines,
+ * section titles), a quieter humanist sans for body copy, and a monospace
+ * face reserved for live/numeric readouts (PRs, metric pills, timers) so
+ * digits hold a fixed width and don't jitter as they update mid-set. All
+ * three are OFL-licensed variable fonts (see core/designsystem/licenses/);
+ * weights are pulled from the single variable file via [FontVariation].
+ */
+@OptIn(androidx.compose.ui.text.ExperimentalTextApi::class)
+private fun variableFont(resId: Int, weight: FontWeight) = Font(resId, weight, variationSettings = FontVariation.Settings(FontVariation.weight(weight.weight)))
+
+private val DisplayFontFamily = FontFamily(
+    variableFont(R.font.space_grotesk, FontWeight.Medium),
+    variableFont(R.font.space_grotesk, FontWeight.SemiBold),
+    variableFont(R.font.space_grotesk, FontWeight.Bold),
+)
+
+private val BodyFontFamily = FontFamily(
+    variableFont(R.font.manrope, FontWeight.Normal),
+    variableFont(R.font.manrope, FontWeight.Medium),
+    variableFont(R.font.manrope, FontWeight.SemiBold),
+)
+
+val NumeralFontFamily = FontFamily(
+    variableFont(R.font.jetbrains_mono, FontWeight.Medium),
+    variableFont(R.font.jetbrains_mono, FontWeight.SemiBold),
+)
+
+private val FitTrackTypography = Typography().let { base ->
+    base.copy(
+        displayLarge = base.displayLarge.copy(fontFamily = DisplayFontFamily),
+        displayMedium = base.displayMedium.copy(fontFamily = DisplayFontFamily),
+        displaySmall = base.displaySmall.copy(fontFamily = DisplayFontFamily),
+        headlineLarge = base.headlineLarge.copy(fontFamily = DisplayFontFamily, fontWeight = FontWeight.SemiBold, letterSpacing = (-1).sp),
+        headlineMedium = base.headlineMedium.copy(fontFamily = DisplayFontFamily, fontWeight = FontWeight.SemiBold, letterSpacing = (-0.6).sp),
+        headlineSmall = base.headlineSmall.copy(fontFamily = DisplayFontFamily),
+        titleLarge = base.titleLarge.copy(fontFamily = DisplayFontFamily, fontWeight = FontWeight.SemiBold),
+        titleMedium = base.titleMedium.copy(fontFamily = DisplayFontFamily, fontWeight = FontWeight.SemiBold),
+        titleSmall = base.titleSmall.copy(fontFamily = DisplayFontFamily),
+        bodyLarge = base.bodyLarge.copy(fontFamily = BodyFontFamily),
+        bodyMedium = base.bodyMedium.copy(fontFamily = BodyFontFamily),
+        bodySmall = base.bodySmall.copy(fontFamily = BodyFontFamily),
+        labelLarge = base.labelLarge.copy(fontFamily = BodyFontFamily, fontWeight = FontWeight.SemiBold),
+        labelMedium = base.labelMedium.copy(fontFamily = BodyFontFamily),
+        labelSmall = base.labelSmall.copy(fontFamily = BodyFontFamily),
+    )
+}
+
+/** Applies the monospace numeral face to a base style - use for any live or
+ * emphasized numeric readout (PR values, metric pills, timers, counters). */
+fun TextStyle.asNumeral(): TextStyle = copy(fontFamily = NumeralFontFamily, letterSpacing = (-0.2).sp)
+
 private val FitTrackDarkColors = darkColorScheme(
     primary = FitTrackPalette.Accent,
     onPrimary = FitTrackPalette.OnAccent,
@@ -109,13 +166,7 @@ fun FitTrackTheme(content: @Composable () -> Unit) {
             large = RoundedCornerShape(24.dp),
             extraLarge = RoundedCornerShape(30.dp),
         ),
-        typography = MaterialTheme.typography.copy(
-            headlineLarge = MaterialTheme.typography.headlineLarge.copy(fontWeight = FontWeight.SemiBold, letterSpacing = (-1).sp),
-            headlineMedium = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.SemiBold, letterSpacing = (-0.6).sp),
-            titleLarge = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.SemiBold),
-            titleMedium = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
-            labelLarge = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold),
-        ),
+        typography = FitTrackTypography,
         content = content,
     )
 }
@@ -163,7 +214,7 @@ fun MetricPill(label: String, value: String, modifier: Modifier = Modifier) {
         border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
     ) {
         Column(Modifier.padding(horizontal = 14.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-            Text(value, style = MaterialTheme.typography.titleLarge)
+            Text(value, style = MaterialTheme.typography.titleLarge.asNumeral())
             Text(label.uppercase(), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }

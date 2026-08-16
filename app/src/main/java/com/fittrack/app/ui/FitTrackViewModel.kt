@@ -34,13 +34,44 @@ data class DashboardInsights(
     val completedWorkoutCount: Int = 0,
 )
 
+/** The three powerlifting competition lifts. "Rekordy osobiste" only ever
+ * tracks these (and their variations) - accessory work (curls, raises,
+ * pulldowns, ...) isn't a meaningful PR to surface on the dashboard. */
+enum class CoreLift(val flagLabel: String) {
+    SQUAT("PRZYSIAD"),
+    BENCH_PRESS("WYCISKANIE"),
+    DEADLIFT("MARTWY CIĄG"),
+}
+
 data class PersonalRecordUi(
     val exerciseName: String,
+    val coreLift: CoreLift,
     val weightKg: Double,
     val reps: Int,
     val estimatedOneRepMaxKg: Double,
     val achievedAt: Instant,
 )
+
+private val SquatKeywords = listOf("squat", "przysiad")
+private val DeadliftKeywords = listOf("deadlift", "martwy ciąg", "martwy")
+private val PressWords = listOf("wyciskanie", "wycisk", "press")
+private val BenchSurfaceWords = listOf("leż", "ław", "bench", "incline", "decline", "flat", "chest", "klat", "skoś")
+
+/** Name-based classification, not a catalog field - it has to work against
+ * whatever exercise names are already in a user's plans/history (Polish or
+ * English, library or hand-typed), not just a curated seed list. Matches on
+ * the lift family (any squat/bench/deadlift variation), not equipment, per
+ * the "(all variations)" scope. Returns null for anything else, including
+ * exercises that merely train the same muscles (leg press, shoulder press). */
+fun classifyCoreLift(exerciseName: String): CoreLift? {
+    val name = exerciseName.lowercase()
+    return when {
+        SquatKeywords.any { name.contains(it) } -> CoreLift.SQUAT
+        DeadliftKeywords.any { name.contains(it) } -> CoreLift.DEADLIFT
+        PressWords.any { name.contains(it) } && BenchSurfaceWords.any { name.contains(it) } -> CoreLift.BENCH_PRESS
+        else -> null
+    }
+}
 
 class FitTrackViewModel(
     profileRepository: ProfileRepository,
@@ -83,6 +114,7 @@ private suspend fun WorkoutRepository.buildDashboardInsights(workouts: List<Work
     val records = mutableMapOf<String, PersonalRecordUi>()
     completed.forEach { workout ->
         getExerciseSessions(workout.id).forEach { exercise ->
+            val coreLift = classifyCoreLift(exercise.exerciseName) ?: return@forEach
             getSetLogs(exercise.id)
                 .filter { set ->
                     set.completedAt != null &&
@@ -95,6 +127,7 @@ private suspend fun WorkoutRepository.buildDashboardInsights(workouts: List<Work
                     val estimate = weight * (1.0 + reps / 30.0)
                     val candidate = PersonalRecordUi(
                         exerciseName = exercise.exerciseName,
+                        coreLift = coreLift,
                         weightKg = weight,
                         reps = reps,
                         estimatedOneRepMaxKg = estimate,

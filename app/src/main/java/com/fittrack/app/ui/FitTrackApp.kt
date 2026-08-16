@@ -63,6 +63,7 @@ import com.fittrack.core.designsystem.LoadingState
 import com.fittrack.core.designsystem.FitTrackCard
 import com.fittrack.core.designsystem.MetricPill
 import com.fittrack.core.designsystem.SectionTitle
+import com.fittrack.core.designsystem.asNumeral
 import com.fittrack.core.model.HealthDay
 import com.fittrack.core.model.WorkoutPlan
 import com.fittrack.feature.coach.CoachRoute
@@ -345,16 +346,19 @@ private fun PersonalRecords(records: List<PersonalRecordUi>) {
                     Surface(shape = CircleShape, color = MaterialTheme.colorScheme.secondaryContainer) {
                         Icon(Icons.Default.EmojiEvents, null, Modifier.padding(9.dp).size(20.dp), tint = MaterialTheme.colorScheme.secondary)
                     }
-                    Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
+                    Column(Modifier.weight(1f).padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                         Text(record.exerciseName, style = MaterialTheme.typography.titleMedium)
-                        Text(
-                            "${formatDashboardWeight(record.weightKg)} kg × ${record.reps}",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            CoreLiftFlag(record.coreLift)
+                            Text(
+                                "${formatDashboardWeight(record.weightKg)} kg × ${record.reps}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
                     }
                     Column(horizontalAlignment = Alignment.End) {
-                        Text("${formatDashboardWeight(record.estimatedOneRepMaxKg)} kg", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
+                        Text("${formatDashboardWeight(record.estimatedOneRepMaxKg)} kg", style = MaterialTheme.typography.titleMedium.asNumeral(), color = MaterialTheme.colorScheme.primary)
                         Text("szac. 1RM", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
@@ -363,6 +367,22 @@ private fun PersonalRecords(records: List<PersonalRecordUi>) {
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun CoreLiftFlag(lift: CoreLift, modifier: Modifier = Modifier) {
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(6.dp),
+        color = MaterialTheme.colorScheme.secondaryContainer,
+    ) {
+        Text(
+            lift.flagLabel,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSecondaryContainer,
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+        )
     }
 }
 
