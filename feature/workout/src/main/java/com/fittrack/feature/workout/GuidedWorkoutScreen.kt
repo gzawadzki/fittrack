@@ -2,6 +2,8 @@ package com.fittrack.feature.workout
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -424,9 +426,16 @@ private fun ActiveSetEditor(
                 )
             }
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            WorkoutStepper("CIĘŻAR KG", weight, 2.5, 0.0..1000.0, true, Modifier.weight(1f)) { weight = it }
-            WorkoutStepper("POWTÓRZENIA", reps, 1.0, 1.0..100.0, false, Modifier.weight(1f)) { reps = it }
+        // Side by side when there is room, stacked on narrow phones / large font scale.
+        FlowRow(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+            maxItemsInEachRow = 2,
+        ) {
+            val stepperModifier = Modifier.weight(1f).widthIn(min = 160.dp)
+            WorkoutStepper("CIĘŻAR KG", weight, 2.5, 0.0..1000.0, true, stepperModifier) { weight = it }
+            WorkoutStepper("POWTÓRZENIA", reps, 1.0, 1.0..100.0, false, stepperModifier) { reps = it }
         }
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Text("RIR", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -435,10 +444,10 @@ private fun ActiveSetEditor(
             Spacer(Modifier.width(10.dp))
             Text("opcjonalnie", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            FilterChip(pain, { pain = !pain }, { Text("Ból") }, Modifier.weight(1f))
-            FilterChip(technique, { technique = !technique }, { Text("Technika") }, Modifier.weight(1f))
-            FilterChip(symptom, { symptom = !symptom }, { Text("Objaw") }, Modifier.weight(1f))
+        FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            FilterChip(pain, { pain = !pain }, { Text("Ból") })
+            FilterChip(technique, { technique = !technique }, { Text("Technika") })
+            FilterChip(symptom, { symptom = !symptom }, { Text("Objaw") })
         }
         if (!valid) {
             Text("Sprawdź ciężar, powtórzenia i RIR.", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
