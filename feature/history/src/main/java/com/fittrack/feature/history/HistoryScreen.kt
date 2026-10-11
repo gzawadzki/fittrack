@@ -31,6 +31,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -171,10 +172,15 @@ private fun StrengthHistory(
             items(entries, key = { it.workoutId }) { item ->
                 var expanded by remember(item.workoutId) { mutableStateOf(false) }
                 FitTrackCard(
-                    modifier = Modifier.fillMaxWidth().combinedClickable(
-                        onClick = { expanded = !expanded },
-                        onLongClick = { onRequestDelete(item.workoutId) },
-                    ),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .combinedClickable(
+                            onClickLabel = if (expanded) "Zwiń" else "Rozwiń",
+                            onLongClickLabel = "Usuń trening",
+                            onClick = { expanded = !expanded },
+                            onLongClick = { onRequestDelete(item.workoutId) },
+                        )
+                        .semantics { stateDescription = if (expanded) "Rozwinięte" else "Zwinięte" },
                 ) {
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                             Text(item.planName, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
@@ -193,6 +199,9 @@ private fun StrengthHistory(
                                 ?: heartRateUnavailableMessage?.let {
                                     Text(it, style = MaterialTheme.typography.bodySmall)
                                 }
+                            TextButton(onClick = { onRequestDelete(item.workoutId) }) {
+                                Text("Usuń trening", color = MaterialTheme.colorScheme.error)
+                            }
                         }
                 }
             }
