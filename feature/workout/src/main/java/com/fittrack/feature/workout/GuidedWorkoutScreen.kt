@@ -65,6 +65,7 @@ import com.fittrack.core.model.SetLog
 import com.fittrack.core.model.SetType
 import com.fittrack.core.designsystem.FitTrackCard
 import com.fittrack.core.designsystem.FitTrackColors
+import com.fittrack.core.designsystem.asNumeral
 import kotlinx.coroutines.delay
 import kotlin.math.max
 
@@ -308,14 +309,14 @@ private fun WorkoutHeader(workoutId: String, planName: String, startedAt: Long, 
                 Text(planName, style = MaterialTheme.typography.titleMedium, color = if (remaining > 0) FitTrackColors.OnRestContainer else MaterialTheme.colorScheme.onSurface)
                 Text(
                     "Trening  ${elapsed / 3600}:${((elapsed % 3600) / 60).toString().padStart(2, '0')}:${(elapsed % 60).toString().padStart(2, '0')}",
-                    style = MaterialTheme.typography.labelMedium,
+                    style = MaterialTheme.typography.labelMedium.asNumeral(),
                     color = if (remaining > 0) FitTrackColors.OnRestContainer else MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
             if (remaining > 0) {
                 Column(horizontalAlignment = Alignment.End) {
                     Text("PRZERWA", style = MaterialTheme.typography.labelSmall, color = FitTrackColors.Rest)
-                    Text("${remaining / 60}:${(remaining % 60).toString().padStart(2, '0')}", style = MaterialTheme.typography.headlineMedium, color = FitTrackColors.OnRestContainer)
+                    Text("${remaining / 60}:${(remaining % 60).toString().padStart(2, '0')}", style = MaterialTheme.typography.headlineMedium.asNumeral(), color = FitTrackColors.OnRestContainer)
                 }
             } else {
                 Icon(Icons.Default.Timer, null, tint = MaterialTheme.colorScheme.primary)
@@ -549,7 +550,7 @@ private fun WorkoutStepper(
                 imeAction = ImeAction.Next,
             ),
             singleLine = true,
-            textStyle = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
+            textStyle = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold).asNumeral(),
         )
     }
 }
