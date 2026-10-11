@@ -76,7 +76,7 @@ Deno.serve(async (req: Request) => {
     // response computed entirely from deterministic logic.
     const { buildFallbackOutput } = await import("./fallback.ts");
     const output = buildFallbackOutput(ctx);
-    await persistPendingSuggestions(auth.supabase, auth.userId, coachRequest.workoutSessionId ?? null, output.suggestions);
+    await persistPendingSuggestions(auth.userId, output.suggestions);
     return jsonResponse(output, 200);
   }
 
@@ -95,7 +95,7 @@ Deno.serve(async (req: Request) => {
     console.warn("coach: safety override applied", result.safetyNotes);
   }
 
-  await persistPendingSuggestions(auth.supabase, auth.userId, coachRequest.workoutSessionId ?? null, result.output.suggestions);
+  await persistPendingSuggestions(auth.userId, result.output.suggestions);
 
   return jsonResponse(result.output, 200);
 });
