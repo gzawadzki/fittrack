@@ -52,6 +52,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.composed
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.font.FontWeight
@@ -411,8 +413,15 @@ private fun ActiveSetEditor(
     val parsedReps = reps.toIntOrNull()
     val parsedWeight = weight.replace(',', '.').toDoubleOrNull()
     val parsedRir = rir.takeIf { it.isNotBlank() }?.toIntOrNull()
-    val valid = parsedReps != null && parsedReps in 1..100 && parsedWeight != null && parsedWeight in 0.0..1000.0 &&
-        (rir.isBlank() || (parsedRir != null && parsedRir in 0..10))
+    val weightValid = parsedWeight != null && parsedWeight in 0.0..1000.0
+    val repsValid = parsedReps != null && parsedReps in 1..100
+    val rirValid = rir.isBlank() || (parsedRir != null && parsedRir in 0..10)
+    val valid = weightValid && repsValid && rirValid
+    // Errors appear per field only after it lost focus or after a save attempt, never while typing.
+    var saveAttempted by rememberSaveable(set.id, set.completedAt) { mutableStateOf(false) }
+    var blurred by rememberSaveable(set.id, set.completedAt) { mutableStateOf(listOf<String>()) }
+    fun showError(field: String, fieldValid: Boolean) = !fieldValid && (saveAttempted || field in blurred)
+    fun markBlurred(field: String) { if (field !in blurred) blurred = blurred + field }
     Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             SetBadge(displayLabel, active = true)
@@ -434,13 +443,24 @@ private fun ActiveSetEditor(
             maxItemsInEachRow = 2,
         ) {
             val stepperModifier = Modifier.weight(1f).widthIn(min = 160.dp)
-            WorkoutStepper("CIĘŻAR KG", weight, 2.5, 0.0..1000.0, true, stepperModifier) { weight = it }
-            WorkoutStepper("POWTÓRZENIA", reps, 1.0, 1.0..100.0, false, stepperModifier) { reps = it }
+            WorkoutStepper(
+                "CIĘŻAR KG", weight, 2.5, 0.0..1000.0, true, stepperModifier,
+                errorText = "0–1000 kg".takeIf { showError("weight", weightValid) },
+                onBlur = { markBlurred("weight") },
+            ) { weight = it }
+            WorkoutStepper(
+                "POWTÓRZENIA", reps, 1.0, 1.0..100.0, false, stepperModifier,
+                errorText = "1–100".takeIf { showError("reps", repsValid) },
+                onBlur = { markBlurred("reps") },
+            ) { reps = it }
         }
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Text("RIR", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Spacer(Modifier.width(8.dp))
-            CompactField("", rir, Modifier.width(72.dp)) { rir = it }
+            CompactField(
+                "", rir, Modifier.width(72.dp).onLostFocus { markBlurred("rir") },
+                isError = showError("rir", rirValid),
+            ) { rir = it }
             Spacer(Modifier.width(10.dp))
             Text("opcjonalnie", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
@@ -449,16 +469,22 @@ private fun ActiveSetEditor(
             FilterChip(technique, { technique = !technique }, { Text("Technika") })
             FilterChip(symptom, { symptom = !symptom }, { Text("Objaw") })
         }
-        if (!valid) {
-            Text("Sprawdź ciężar, powtórzenia i RIR.", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+        if (showError("rir", rirValid)) {
+            Text("RIR: 0–10 albo puste.", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
         }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             OutlinedButton(onClick = onSkip, enabled = !busy, modifier = Modifier.weight(1f).heightIn(min = 52.dp)) {
                 Text("Pomiń serię")
             }
             Button(
-                onClick = { onLog(parsedReps!!, parsedWeight!!, parsedRir, pain, technique, symptom) },
-                enabled = valid && !busy,
+                onClick = {
+                    if (valid && parsedReps != null && parsedWeight != null) {
+                        onLog(parsedReps, parsedWeight, parsedRir, pain, technique, symptom)
+                    } else {
+                        saveAttempted = true
+                    }
+                },
+                enabled = !busy,
                 modifier = Modifier.weight(2f).heightIn(min = 52.dp),
             ) {
                 Icon(Icons.Default.Check, null)
@@ -537,6 +563,8 @@ private fun WorkoutStepper(
     range: ClosedFloatingPointRange<Double>,
     decimal: Boolean,
     modifier: Modifier,
+    errorText: String? = null,
+    onBlur: () -> Unit = {},
     update: (String) -> Unit,
 ) {
     fun adjust(delta: Double) {
@@ -552,6 +580,9 @@ private fun WorkoutStepper(
                 val validInput = if (decimal) input.matches(Regex("[0-9]*[,.]?[0-9]*")) else input.all(Char::isDigit)
                 if (input.isEmpty() || validInput) update(input)
             },
+            modifier = Modifier.onLostFocus(onBlur),
+            isError = errorText != null,
+            supportingText = errorText?.let { { Text(it) } },
             leadingIcon = { IconButton({ adjust(-step) }) { Icon(Icons.Default.Remove, "Zmniejsz $label") } },
             trailingIcon = { IconButton({ adjust(step) }) { Icon(Icons.Default.Add, "Zwiększ $label") } },
             keyboardOptions = KeyboardOptions(
@@ -573,6 +604,7 @@ private fun CompactField(
     value: String,
     modifier: Modifier,
     decimal: Boolean = false,
+    isError: Boolean = false,
     update: (String) -> Unit,
 ) =
     OutlinedTextField(
@@ -583,6 +615,7 @@ private fun CompactField(
         },
         label = label.takeIf(String::isNotBlank)?.let { text -> { Text(text) } },
         modifier = modifier,
+        isError = isError,
         keyboardOptions = KeyboardOptions(
             keyboardType = if (decimal) KeyboardType.Decimal else KeyboardType.Number,
             imeAction = ImeAction.Next,
@@ -614,4 +647,12 @@ private fun ReasonDialog(title: String, label: String, dismiss: () -> Unit, conf
         confirmButton = { Button({ confirm(reason) }) { Text("Potwierdź") } },
         dismissButton = { TextButton(dismiss) { Text("Anuluj") } },
     )
+}
+
+/** Calls [onLost] when this element loses focus after having had it (not on initial composition). */
+private fun Modifier.onLostFocus(onLost: () -> Unit): Modifier = composed {
+    var hadFocus by remember { mutableStateOf(false) }
+    onFocusChanged { state ->
+        if (state.isFocused) hadFocus = true else if (hadFocus) onLost()
+    }
 }
