@@ -1,10 +1,14 @@
 package com.fittrack.platform.reminders
 
+import android.Manifest
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
+import androidx.core.content.ContextCompat
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import java.time.Instant
@@ -25,6 +29,9 @@ class WorkoutReminderWorker(appContext: Context, params: WorkerParameters) : Cor
     }
 
     private fun notify(planId: String, title: String, scheduledAt: Instant, kind: ReminderKind) {
+        if (Build.VERSION.SDK_INT >= 33 &&
+            ContextCompat.checkSelfPermission(applicationContext, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) return
         val startIntent = activityIntent(planId, ACTION_START)
         val snoozeIntent = actionIntent(ACTION_SNOOZE, planId, title, scheduledAt)
         val rescheduleIntent = activityIntent(planId, ACTION_RESCHEDULE)

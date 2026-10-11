@@ -80,7 +80,7 @@ export function computeHrWindow(
     throw new Error("computeHrWindow: endedAt before startedAt");
   }
 
-  let windowStart = startedAt - FIVE_MIN_MS;
+  const windowStart = startedAt - FIVE_MIN_MS;
   let windowEnd = endedAt + FIVE_MIN_MS;
 
   if (windowEnd - windowStart > ONE_DAY_MS) {
