@@ -54,7 +54,7 @@ async function sha256(text: string): Promise<string> {
   return Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-async function attemptGeminiUpload(source: ManifestSource, content: string, apiKey: string): Promise<{ ok: boolean; reason: string | null }> {
+async function attemptGeminiUpload(_source: ManifestSource, content: string, apiKey: string): Promise<{ ok: boolean; reason: string | null }> {
   try {
     // Best-effort: Gemini Files API upload. Exact File Search / corpora attachment flow for a
     // structured-output model call is not exercised here (no live credentials in this

@@ -4,14 +4,10 @@
 // not as something to compute itself (section 5 / M7 brief: model is never the source of
 // the numeric recommendation).
 //
-// NOTE on table names: supabase/migrations (owned by M5) had not been published at the time
-// this function was written. Table/column names below are best-effort guesses consistent
-// with the domain types in IMPLEMENTATION_PLAN.md section 4 (profiles, workout_sessions,
-// workout_sets, fitbit_daily_aggregates). All reads are defensive: a missing table/column
-// degrades to a neutral default rather than throwing, so the coach endpoint degrades
-// gracefully instead of 500ing while M5's schema stabilizes. Once the real schema lands,
-// update the query bodies in this file only - the shape returned by buildCoachContext()
-// (CoachContext) is what the rest of this module depends on and should not need to change.
+// Schema: see supabase/migrations (user_profiles, fitbit_daily_metrics,
+// fitbit_hr_exercise_aggregates, workout_sessions, exercise_sessions, set_logs, plan_exercises).
+// Query errors are logged and degrade to neutral defaults so the coach still answers,
+// but they are never silently swallowed.
 
 import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.45.4";
 import {
@@ -63,23 +59,21 @@ export interface CoachContext {
   untrustedNotes: string[];
 }
 
-async function safeSingle<T>(promise: Promise<{ data: T | null; error: unknown }>): Promise<T | null> {
-  try {
-    const { data, error } = await promise;
-    if (error) return null;
-    return data ?? null;
-  } catch {
-    return null;
-  }
-}
+// deno-lint-ignore no-explicit-any
+type Row = Record<string, any>;
+type QueryResult<T> = { data: T | null; error: { message?: string } | null };
 
-async function safeList<T>(promise: Promise<{ data: T[] | null; error: unknown }>): Promise<T[]> {
+async function query<T>(label: string, q: PromiseLike<QueryResult<T>>): Promise<T | null> {
   try {
-    const { data, error } = await promise;
-    if (error || !data) return [];
-    return data;
-  } catch {
-    return [];
+    const { data, error } = await q;
+    if (error) {
+      console.error(`coach context: ${label} failed`, error.message ?? String(error));
+      return null;
+    }
+    return data ?? null;
+  } catch (e) {
+    console.error(`coach context: ${label} threw`, String(e));
+    return null;
   }
 }
 
@@ -88,9 +82,14 @@ export async function buildCoachContext(
   userId: string,
   req: CoachRequest,
 ): Promise<CoachContext> {
-  // deno-lint-ignore no-explicit-any
-  const profileRow = await safeSingle<any>(
-    supabase.from("profiles").select("goal, experience, equipment, schedule, constraints, preferences").eq("id", userId).maybeSingle(),
+  const profileRow = await query<Row>(
+    "user_profiles",
+    supabase
+      .from("user_profiles")
+      .select("goal, experience, equipment, schedule, constraints, preferences")
+      .eq("user_id", userId)
+      .is("deleted_at", null)
+      .maybeSingle(),
   );
   const profile: ProfileSummary | null = profileRow
     ? {
@@ -103,37 +102,98 @@ export async function buildCoachContext(
     }
     : null;
 
-  // deno-lint-ignore no-explicit-any
-  const fitbitRow = await safeSingle<any>(
+  // Newest first: [0] is today's/last night's metrics, the rest is the readiness baseline.
+  const dailyMetrics = (await query<Row[]>(
+    "fitbit_daily_metrics",
     supabase
-      .from("fitbit_daily_aggregates")
-      .select("resting_heart_rate, sleep_minutes, steps, avg_hr_workout, max_hr_workout, hr_recovery_delta_bpm")
+      .from("fitbit_daily_metrics")
+      .select("metric_date, sleep_minutes, resting_heart_rate, steps")
       .eq("user_id", userId)
-      .order("day", { ascending: false })
-      .limit(1)
-      .maybeSingle(),
+      .is("deleted_at", null)
+      .order("metric_date", { ascending: false })
+      .limit(15),
+  )) ?? [];
+  const latestMetrics = dailyMetrics[0] ?? null;
+
+  const sessionColumns = "id, status, started_at, note";
+  const sessionRow = await query<Row>(
+    "workout_sessions (current)",
+    req.workoutSessionId
+      ? supabase.from("workout_sessions").select(sessionColumns).eq("id", req.workoutSessionId).eq("user_id", userId).maybeSingle()
+      : supabase.from("workout_sessions").select(sessionColumns).eq("user_id", userId).is("deleted_at", null)
+        .order("started_at", { ascending: false }).limit(1).maybeSingle(),
   );
-  const fitbit: FitbitAggregateSummary | null = fitbitRow
+
+  const recentSessions = (await query<Row[]>(
+    "workout_sessions (recent)",
+    supabase.from("workout_sessions").select(sessionColumns).eq("user_id", userId).is("deleted_at", null)
+      .order("started_at", { ascending: false }).limit(5),
+  )) ?? [];
+
+  // Primary exercise of the session = first exercise_session by position. Its plan_exercise_id
+  // is the suggestion target (suggestion-decision resolves LOAD/VOLUME/SWAP against plan_exercises).
+  const exerciseSessions = sessionRow
+    ? (await query<Row[]>(
+      "exercise_sessions",
+      supabase
+        .from("exercise_sessions")
+        .select("id, plan_exercise_id, exercise_id, exercise_name_snapshot, position")
+        .eq("user_id", userId)
+        .eq("workout_session_id", sessionRow.id)
+        .is("deleted_at", null)
+        .order("position", { ascending: true }),
+    )) ?? []
+    : [];
+  const primaryExercise = exerciseSessions[0] ?? null;
+
+  const sets = primaryExercise
+    ? (await query<Row[]>(
+      "set_logs",
+      supabase
+        .from("set_logs")
+        .select("set_type, target_rep_min, target_rep_max, target_rir, target_weight_kg, actual_reps, actual_weight_kg, actual_rir, pain, technique_issue, concerning_symptom, completed_at")
+        .eq("user_id", userId)
+        .eq("exercise_session_id", primaryExercise.id)
+        .is("deleted_at", null)
+        .not("completed_at", "is", null)
+        .order("position", { ascending: true }),
+    )) ?? []
+    : [];
+
+  const planExercise = primaryExercise
+    ? await query<Row>(
+      "plan_exercises",
+      supabase.from("plan_exercises").select("weight_increment_kg").eq("id", primaryExercise.plan_exercise_id).eq("user_id", userId).maybeSingle(),
+    )
+    : null;
+
+  const hrAggregates = sessionRow
+    ? (await query<Row[]>(
+      "fitbit_hr_exercise_aggregates",
+      supabase
+        .from("fitbit_hr_exercise_aggregates")
+        .select("exercise_id, avg_bpm, max_bpm, recovery_delta_bpm")
+        .eq("user_id", userId)
+        .eq("workout_session_id", sessionRow.id)
+        .is("deleted_at", null),
+    )) ?? []
+    : [];
+  const avgs = hrAggregates.map((r) => r.avg_bpm).filter((v): v is number => typeof v === "number");
+  const maxes = hrAggregates.map((r) => r.max_bpm).filter((v): v is number => typeof v === "number");
+  const primaryHr = hrAggregates.find((r) => r.exercise_id === primaryExercise?.exercise_id) ?? null;
+
+  const fitbit: FitbitAggregateSummary | null = latestMetrics || hrAggregates.length > 0
     ? {
-      restingHeartRate: fitbitRow.resting_heart_rate ?? null,
-      sleepMinutesLastNight: fitbitRow.sleep_minutes ?? null,
-      stepsLastNight: fitbitRow.steps ?? null,
-      avgHrDuringLastWorkout: fitbitRow.avg_hr_workout ?? null,
-      maxHrDuringLastWorkout: fitbitRow.max_hr_workout ?? null,
-      hrRecoveryDeltaBpm: fitbitRow.hr_recovery_delta_bpm ?? null,
+      restingHeartRate: latestMetrics?.resting_heart_rate ?? null,
+      sleepMinutesLastNight: latestMetrics?.sleep_minutes ?? null,
+      stepsLastNight: latestMetrics?.steps ?? null,
+      avgHrDuringLastWorkout: avgs.length ? Math.round(avgs.reduce((a, b) => a + b, 0) / avgs.length) : null,
+      maxHrDuringLastWorkout: maxes.length ? Math.max(...maxes) : null,
+      hrRecoveryDeltaBpm: primaryHr?.recovery_delta_bpm ?? null,
     }
     : null;
 
-  // deno-lint-ignore no-explicit-any
-  const recoveryHistory = await safeList<any>(
-    supabase
-      .from("fitbit_daily_aggregates")
-      .select("sleep_minutes, resting_heart_rate")
-      .eq("user_id", userId)
-      .order("day", { ascending: false })
-      .limit(15),
-  );
-  const history: RecoveryDay[] = recoveryHistory.slice(1).map((r) => ({
+  const history: RecoveryDay[] = dailyMetrics.slice(1).map((r) => ({
     sleepMinutes: r.sleep_minutes ?? null,
     restingHeartRate: r.resting_heart_rate ?? null,
   }));
@@ -143,56 +203,27 @@ export async function buildCoachContext(
   };
   const readiness = ReadinessCalculator.calculate(today, history);
 
-  // deno-lint-ignore no-explicit-any
-  let sessionRow: any = null;
-  if (req.workoutSessionId) {
-    sessionRow = await safeSingle(
-      supabase.from("workout_sessions").select("id, status, started_at, note").eq("id", req.workoutSessionId).eq("user_id", userId).maybeSingle(),
-    );
-  } else {
-    sessionRow = await safeSingle(
-      supabase.from("workout_sessions").select("id, status, started_at, note").eq("user_id", userId).order("started_at", { ascending: false }).limit(1).maybeSingle(),
-    );
-  }
-
-  // deno-lint-ignore no-explicit-any
-  const recentSessions = await safeList<any>(
-    supabase.from("workout_sessions").select("id, status, started_at, note").eq("user_id", userId).order("started_at", { ascending: false }).limit(5),
-  );
-
-  // deno-lint-ignore no-explicit-any
-  const sets = sessionRow
-    ? await safeList<any>(
-      supabase
-        .from("workout_sets")
-        .select("target_id, exercise_name, reps, rir, is_warmup, pain, technique_issue, concerning_symptom, weight_kg, rep_min, rep_max, target_rir, increment_kg")
-        .eq("session_id", sessionRow.id),
-    )
-    : [];
-
   let deterministic: ProgressionRecommendation | null = null;
   let targetId: string | null = null;
 
-  if (sets.length > 0) {
-    const primary = sets[0];
-    targetId = primary.target_id ?? null;
-    const setPerformances: SetPerformance[] = sets
-      .filter((s) => s.target_id === targetId)
-      .map((s) => ({
-        reps: s.reps ?? 0,
-        rir: s.rir ?? null,
-        isWarmup: !!s.is_warmup,
-        pain: !!s.pain,
-        techniqueIssue: !!s.technique_issue,
-        concerningSymptom: !!s.concerning_symptom,
-      }));
+  if (primaryExercise && sets.length > 0) {
+    targetId = primaryExercise.plan_exercise_id ?? null;
+    const working = sets.find((s) => s.set_type === "WORKING") ?? sets[0];
+    const setPerformances: SetPerformance[] = sets.map((s) => ({
+      reps: s.actual_reps ?? 0,
+      rir: s.actual_rir ?? null,
+      isWarmup: s.set_type === "WARMUP",
+      pain: !!s.pain,
+      techniqueIssue: !!s.technique_issue,
+      concerningSymptom: !!s.concerning_symptom,
+    }));
 
     const input: ProgressionInput = {
-      currentWeightKg: primary.weight_kg ?? 0,
-      incrementKg: primary.increment_kg ?? 2.5,
-      repMin: primary.rep_min ?? 8,
-      repMax: primary.rep_max ?? 12,
-      targetRir: primary.target_rir ?? null,
+      currentWeightKg: Number(working.actual_weight_kg ?? working.target_weight_kg ?? 0),
+      incrementKg: Number(planExercise?.weight_increment_kg ?? 2.5),
+      repMin: working.target_rep_min ?? 8,
+      repMax: working.target_rep_max ?? 12,
+      targetRir: working.target_rir ?? null,
       sets: setPerformances,
       consecutiveSuccessfulSessions: 0,
       consecutiveMissedSessions: 0,
@@ -207,7 +238,7 @@ export async function buildCoachContext(
     startedAt: s.started_at ?? null,
     note: typeof s.note === "string" ? s.note : "",
     exerciseTargetId: targetId,
-    exerciseName: sets[0]?.exercise_name ?? null,
+    exerciseName: primaryExercise?.exercise_name_snapshot ?? null,
   }));
 
   const untrustedNotes = recentWorkouts.map((w) => w.note).filter((n) => n && n.trim() !== "");
