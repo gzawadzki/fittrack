@@ -113,4 +113,4 @@ deno test --allow-all supabase/functions
 
 Testy jednostkowe obejmują m.in. `core:training`, repozytoria Room i outbox, orkiestrację synchronizacji, dopasowanie tętna, gateway coacha, ustawienia, przypomnienia i pipeline po treningu. Test RLS (`supabase/tests/rls_and_sync.sql`) wymaga lokalnego Supabase.
 
-CI (GitHub Actions, `.github/workflows/ci.yml`) uruchamia Gradle `test lintDebug` oraz `deno check/lint/test` i evale. Workflow jest dodawany w PR #1.
+CI (GitHub Actions, `.github/workflows/ci.yml`) uruchamia się przy każdym pushu do `master` i przy każdym PR: Gradle `test lintDebug` oraz `deno check`, `deno lint`, `deno test` i evale coacha.
