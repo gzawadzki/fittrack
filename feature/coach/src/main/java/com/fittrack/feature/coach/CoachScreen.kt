@@ -27,6 +27,9 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.Role
+import androidx.compose.foundation.layout.wrapContentHeight
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -267,7 +270,14 @@ private fun CitationList(citations: List<Citation>, onOpenCitation: (String) -> 
             text = "Źródło: ${citation.title}${citation.claim.takeIf(String::isNotBlank)?.let { " — $it" }.orEmpty()}",
             style = MaterialTheme.typography.bodySmall,
             color = if (safe) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = if (safe) Modifier.clickable { onOpenCitation(citation.url) } else Modifier,
+            modifier = if (safe) {
+                Modifier
+                    .heightIn(min = 48.dp)
+                    .wrapContentHeight(Alignment.CenterVertically)
+                    .clickable(role = Role.Button, onClickLabel = "Otwórz źródło") { onOpenCitation(citation.url) }
+            } else {
+                Modifier
+            },
         )
     }
 }
